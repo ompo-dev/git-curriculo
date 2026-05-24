@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import type { AtsAnalysis, ResumeDocument, SyncStatus } from "@gitcurriculo/core";
+import { emptySyncProgress } from "@gitcurriculo/core";
 
 interface ExtensionState {
   token: string;
@@ -29,7 +30,8 @@ const initialStatus: SyncStatus = {
   syncedCommits: 0,
   syncedPullRequests: 0,
   syncedIssues: 0,
-  errorMessage: null
+  errorMessage: null,
+  progress: emptySyncProgress()
 };
 
 export const useExtensionStore = create<ExtensionState>((set) => ({

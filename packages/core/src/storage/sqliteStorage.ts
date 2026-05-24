@@ -10,6 +10,8 @@ import {
 } from "../schemas";
 
 const DB_BINARY_KEY = "git-curriculo:sqlite-binary";
+const IDB_NAME = "git-curriculo";
+const IDB_STORE = "kv";
 
 const toBase64 = (value: Uint8Array): string => {
   if (typeof btoa === "function") {
@@ -34,6 +36,44 @@ const fromBase64 = (value: string): Uint8Array => {
   return new Uint8Array(Buffer.from(value, "base64"));
 };
 
+const openIdb = (): Promise<IDBDatabase> =>
+  new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("IndexedDB indisponivel"));
+      return;
+    }
+    const request = indexedDB.open(IDB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(IDB_STORE)) {
+        request.result.createObjectStore(IDB_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("Falha ao abrir IndexedDB"));
+  });
+
+const idbGet = async (key: string): Promise<string | null> => {
+  const db = await openIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readonly");
+    const req = tx.objectStore(IDB_STORE).get(key);
+    req.onsuccess = () => resolve((req.result as string | undefined) ?? null);
+    req.onerror = () => reject(req.error ?? new Error("Falha ao ler IndexedDB"));
+    tx.oncomplete = () => db.close();
+  });
+};
+
+const idbSet = async (key: string, value: string): Promise<void> => {
+  const db = await openIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    const req = tx.objectStore(IDB_STORE).put(value, key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error ?? new Error("Falha ao gravar IndexedDB"));
+    tx.oncomplete = () => db.close();
+  });
+};
+
 export interface BrowserSqliteStorageOptions {
   locateFileBaseUrl?: string;
   locateFile?: (file: string) => string;
@@ -46,12 +86,17 @@ export class BrowserSqliteStorage {
   private readonly persistKey: string;
   private sql: SqlJsStatic | null = null;
   private db: Database | null = null;
+  private persistWarning: string | null = null;
 
   constructor(options: BrowserSqliteStorageOptions = {}) {
     this.locateFileBaseUrl =
       options.locateFileBaseUrl ?? "https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist";
     this.locateFileResolver = options.locateFile;
     this.persistKey = options.persistKey ?? DB_BINARY_KEY;
+  }
+
+  getPersistWarning(): string | null {
+    return this.persistWarning;
   }
 
   async init(): Promise<void> {
@@ -65,14 +110,31 @@ export class BrowserSqliteStorage {
       const locateFile =
         this.locateFileResolver ??
         ((file: string) => {
-          // sql.js browser loader may ask for `sql-wasm-browser.wasm` while older CDN tags only ship `sql-wasm.wasm`.
           const normalized = file.replace("sql-wasm-browser.wasm", "sql-wasm.wasm");
           return `${this.locateFileBaseUrl}/${normalized}`;
         });
       this.sql = await initSqlJs({ locateFile });
     }
 
-    const saved = localStorage.getItem(this.persistKey);
+    let saved: string | null = null;
+    try {
+      saved = await idbGet(this.persistKey);
+    } catch {
+      saved = null;
+    }
+
+    if (!saved && typeof localStorage !== "undefined") {
+      saved = localStorage.getItem(this.persistKey);
+      if (saved) {
+        try {
+          await idbSet(this.persistKey, saved);
+          localStorage.removeItem(this.persistKey);
+        } catch {
+          // keep localStorage copy if migration fails
+        }
+      }
+    }
+
     if (saved) {
       this.db = new this.sql.Database(fromBase64(saved));
     } else {
@@ -86,11 +148,12 @@ export class BrowserSqliteStorage {
     await this.ensureInit();
     const parsed = GitHubProfileSnapshotSchema.parse(snapshot);
 
-    this.db?.run(
-      `INSERT INTO snapshots(captured_at, payload_json) VALUES (?, ?);`,
-      [parsed.capturedAt, JSON.stringify(parsed)]
-    );
-    this.persist();
+    this.db?.run(`DELETE FROM snapshots;`);
+    this.db?.run(`INSERT INTO snapshots(captured_at, payload_json) VALUES (?, ?);`, [
+      parsed.capturedAt,
+      JSON.stringify(parsed)
+    ]);
+    await this.persist();
   }
 
   async getLatestSnapshot(): Promise<GitHubProfileSnapshot | null> {
@@ -111,22 +174,24 @@ export class BrowserSqliteStorage {
     await this.ensureInit();
     const parsed = AtsAnalysisSchema.parse(analysis);
 
+    this.pruneTable("metrics", 5);
     this.db?.run(`INSERT INTO metrics(captured_at, payload_json) VALUES (?, ?);`, [
       capturedAt,
       JSON.stringify(parsed)
     ]);
-    this.persist();
+    await this.persist();
   }
 
   async saveResume(capturedAt: string, resume: ResumeDocument): Promise<void> {
     await this.ensureInit();
     const parsed = ResumeDocumentSchema.parse(resume);
 
+    this.pruneTable("resumes", 5);
     this.db?.run(`INSERT INTO resumes(captured_at, payload_json) VALUES (?, ?);`, [
       capturedAt,
       JSON.stringify(parsed)
     ]);
-    this.persist();
+    await this.persist();
   }
 
   exportBinary(): Uint8Array {
@@ -134,6 +199,13 @@ export class BrowserSqliteStorage {
       throw new Error("Banco nao inicializado");
     }
     return this.db.export();
+  }
+
+  private pruneTable(table: "metrics" | "resumes", keep: number): void {
+    this.db?.run(
+      `DELETE FROM ${table} WHERE id NOT IN (SELECT id FROM ${table} ORDER BY captured_at DESC LIMIT ?);`,
+      [keep]
+    );
   }
 
   private runMigrations(): void {
@@ -156,15 +228,38 @@ export class BrowserSqliteStorage {
         payload_json TEXT NOT NULL
       );
     `);
-    this.persist();
+    void this.persist();
   }
 
-  private persist(): void {
+  private async persist(): Promise<void> {
     if (!this.db) {
       return;
     }
 
-    localStorage.setItem(this.persistKey, toBase64(this.db.export()));
+    const payload = toBase64(this.db.export());
+    this.persistWarning = null;
+
+    try {
+      await idbSet(this.persistKey, payload);
+      if (typeof localStorage !== "undefined") {
+        localStorage.removeItem(this.persistKey);
+      }
+      return;
+    } catch {
+      // fallback to localStorage only if IndexedDB fails
+    }
+
+    if (typeof localStorage === "undefined") {
+      this.persistWarning = "Nao foi possivel persistir dados localmente.";
+      return;
+    }
+
+    try {
+      localStorage.setItem(this.persistKey, payload);
+    } catch {
+      this.persistWarning =
+        "Armazenamento local cheio. Sincronize novamente apos limpar dados do site no navegador.";
+    }
   }
 
   private async ensureInit(): Promise<void> {

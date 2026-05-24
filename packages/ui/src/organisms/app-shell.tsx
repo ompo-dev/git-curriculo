@@ -23,13 +23,21 @@ function useTheme() {
     localStorage.setItem("gc-theme", theme);
   }, [theme]);
 
-  const toggle = () => setTheme(t => (t === "dark" ? "light" : "dark"));
+  const toggle = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
   return { theme, toggle };
 }
 
-function Inner({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function Inner({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <div className={`mx-auto w-full max-w-[1280px] px-4 sm:px-6 lg:px-8 ${className}`}>
+    <div
+      className={`mx-auto w-full max-w-[1280px] px-4 sm:px-6 lg:px-8 ${className}`}
+    >
       {children}
     </div>
   );
@@ -57,7 +65,7 @@ export function AppShell({
   user,
   extensionUrl,
   extensionDownloadUrl,
-  children
+  children,
 }: {
   user?: AppShellUser;
   extensionUrl?: string;
@@ -86,14 +94,17 @@ export function AppShell({
   const handleExtClick = (e: React.MouseEvent): void => {
     if (extensionUrl) return;
     e.preventDefault();
-    setShowGuide(v => !v);
+    setShowGuide((v) => !v);
   };
 
   const copyExtUrl = (): void => {
-    navigator.clipboard.writeText(extMgrUrl).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {});
+    navigator.clipboard
+      .writeText(extMgrUrl)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => {});
   };
 
   return (
@@ -102,7 +113,9 @@ export function AppShell({
         <Inner className="flex items-center gap-3 py-3">
           <div className="flex items-center gap-2 text-white">
             <GitHubMark size={26} className="shrink-0" />
-            <span className="hidden text-sm font-semibold sm:inline">Git Curriculo</span>
+            <span className="hidden text-sm font-semibold sm:inline">
+              Git Curriculo
+            </span>
           </div>
 
           <div className="flex-1" />
@@ -130,11 +143,19 @@ export function AppShell({
                       Extensao baixada!
                     </p>
                   ) : (
-                    <p className="font-semibold text-white/90">Instalar extensao</p>
+                    <p className="font-semibold text-white/90">
+                      Instalar extensao
+                    </p>
                   )}
                   {extensionDownloadUrl && (
                     <button
-                      onClick={() => { triggerDownload(extensionDownloadUrl, "git-curriculo-extension.zip"); setDownloaded(true); }}
+                      onClick={() => {
+                        triggerDownload(
+                          extensionDownloadUrl,
+                          "git-curriculo-extension.zip",
+                        );
+                        setDownloaded(true);
+                      }}
                       className="shrink-0 rounded bg-white/10 px-2 py-0.5 text-[10px] text-white/70 transition-colors hover:bg-white/20 hover:text-white"
                     >
                       {downloaded ? "Baixar novamente" : "Baixar"}
@@ -144,17 +165,32 @@ export function AppShell({
 
                 <ol className="space-y-3 text-white/75">
                   <li className="flex gap-2">
-                    <span className="mt-px shrink-0 font-bold text-white">1.</span>
+                    <span className="mt-px shrink-0 font-bold text-white">
+                      1.
+                    </span>
                     <span>
-                      {extensionDownloadUrl
-                        ? <>Aguarde o download do <code className="rounded bg-white/10 px-1 py-px text-[10px]">.zip</code> terminar e <strong className="text-white">extraia</strong> a pasta</>
-                        : <span className="italic text-white/50">Extensao em desenvolvimento — download em breve</span>
-                      }
+                      {extensionDownloadUrl ? (
+                        <>
+                          Aguarde o download do{" "}
+                          <code className="rounded bg-white/10 px-1 py-px text-[10px]">
+                            .zip
+                          </code>{" "}
+                          terminar e{" "}
+                          <strong className="text-white">extraia</strong> a
+                          pasta
+                        </>
+                      ) : (
+                        <span className="italic text-white/50">
+                          Extensao em desenvolvimento — download em breve
+                        </span>
+                      )}
                     </span>
                   </li>
 
                   <li className="flex gap-2">
-                    <span className="mt-px shrink-0 font-bold text-white">2.</span>
+                    <span className="mt-px shrink-0 font-bold text-white">
+                      2.
+                    </span>
                     <div className="min-w-0 flex-1">
                       <p className="mb-1">Abra o gerenciador de extensoes:</p>
                       <div className="flex items-center gap-1.5 rounded bg-white/5 px-2 py-1">
@@ -166,21 +202,41 @@ export function AppShell({
                           title="Copiar URL"
                           className="shrink-0 rounded p-0.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
                         >
-                          {copied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
+                          {copied ? (
+                            <Check size={11} className="text-green-400" />
+                          ) : (
+                            <Copy size={11} />
+                          )}
                         </button>
                       </div>
-                      <p className="mt-1 text-[10px] text-white/40">Cole na barra de endereco do navegador</p>
+                      <p className="mt-1 text-[10px] text-white/40">
+                        Cole na barra de endereco do navegador
+                      </p>
                     </div>
                   </li>
 
                   <li className="flex gap-2">
-                    <span className="mt-px shrink-0 font-bold text-white">3.</span>
-                    <span>Ative o <strong className="text-white">Modo desenvolvedor</strong> (canto superior direito)</span>
+                    <span className="mt-px shrink-0 font-bold text-white">
+                      3.
+                    </span>
+                    <span>
+                      Ative o{" "}
+                      <strong className="text-white">Modo desenvolvedor</strong>{" "}
+                      (canto superior direito)
+                    </span>
                   </li>
 
                   <li className="flex gap-2">
-                    <span className="mt-px shrink-0 font-bold text-white">4.</span>
-                    <span>Clique em <strong className="text-white">Carregar sem compactacao</strong> e selecione a pasta extraida do zip</span>
+                    <span className="mt-px shrink-0 font-bold text-white">
+                      4.
+                    </span>
+                    <span>
+                      Clique em{" "}
+                      <strong className="text-white">
+                        Carregar sem compactacao
+                      </strong>{" "}
+                      e selecione a pasta extraida do zip
+                    </span>
                   </li>
                 </ol>
 
@@ -201,25 +257,6 @@ export function AppShell({
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
-
-          {user ? (
-            <div className="flex min-w-0 items-center gap-2">
-              {user.avatarUrl ? (
-                <img
-                  src={user.avatarUrl}
-                  alt={user.login}
-                  className="h-8 w-8 shrink-0 rounded-full border border-white/20"
-                />
-              ) : (
-                <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-bold text-white">
-                  {user.login.slice(0, 2).toUpperCase()}
-                </span>
-              )}
-              <span className="hidden truncate text-sm font-medium text-white sm:inline">
-                {user.login}
-              </span>
-            </div>
-          ) : null}
         </Inner>
       </header>
 

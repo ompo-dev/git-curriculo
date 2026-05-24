@@ -51,14 +51,20 @@ export const buildSnapshotFixture = (): GitHubProfileSnapshot => ({
       repoName: "repo-1",
       message: "feat: add react dashboard",
       committedAt: "2026-05-01T10:00:00.000Z",
-      url: "https://github.com/octocat/repo-1/commit/a1"
+      url: "https://github.com/octocat/repo-1/commit/a1",
+      filesChanged: [],
+      technologies: ["react"],
+      impactSignals: []
     },
     {
       sha: "a2",
       repoName: "repo-2",
       message: "fix: update api integration",
       committedAt: "2026-04-01T10:00:00.000Z",
-      url: "https://github.com/octocat/repo-2/commit/a2"
+      url: "https://github.com/octocat/repo-2/commit/a2",
+      filesChanged: [],
+      technologies: ["api"],
+      impactSignals: []
     }
   ],
   pullRequests: [
@@ -71,7 +77,10 @@ export const buildSnapshotFixture = (): GitHubProfileSnapshot => ({
       createdAt: "2026-05-01T10:00:00.000Z",
       updatedAt: "2026-05-02T10:00:00.000Z",
       mergedAt: "2026-05-02T10:00:00.000Z",
-      url: "https://github.com/octocat/repo-1/pull/1"
+      url: "https://github.com/octocat/repo-1/pull/1",
+      labels: [],
+      technologies: ["tailwind"],
+      impactSignals: []
     }
   ],
   issues: [
@@ -98,5 +107,6 @@ export const buildSnapshotFixture = (): GitHubProfileSnapshot => ({
     failedRuns: 2,
     cancelledRuns: 1,
     mode: "limited"
-  }
+  },
+  repoAnalyses: []
 });

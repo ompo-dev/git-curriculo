@@ -12,14 +12,30 @@ import {
   ResumeService,
   SecureStorage,
   SyncService,
-  extractKeywords,
+  AiAtsAnalyzer,
+  blueprintToGenerationRules,
+  buildRepoProfile,
+  sanitizeResumeMarkdown,
+  updateBlueprintFromEvaluation,
+  atsAnalysisFromBlueprint,
+  blueprintToPromptBlock,
+  evidenceHintsForKeywords,
+  filterEvidenceByRepos,
+  findMissingEvidencedKeywords,
   normalizeKeyword,
+  analyzeResumeQuality,
+  buildPdfDocumentTitle,
   unique,
+  type AtsAnalysis,
+  type AtsBlueprint,
   type EncryptedSecret,
   type GitHubProfileSnapshot
 } from "@gitcurriculo/core";
 import { Button, GitHubLikeDashboardPage, Input, Textarea } from "@gitcurriculo/ui";
 
+import { RepoDetailPanel } from "./components/repo-detail-panel";
+import { SyncProgressPanel } from "./components/sync-progress-panel";
+import { MarkdownPreview } from "./components/markdown-preview";
 import { useAppStore } from "./store/useAppStore";
 
 const AUTH_START_PATH = "/oauth/github/start";
@@ -33,6 +49,21 @@ const LOCAL_PASSPHRASE_KEY = "git-curriculo:web:passphrase";   // localStorage: 
 const LOCAL_JOB_TEXT_KEY = "git-curriculo:web:job-text";
 const LOCAL_PROFILE_PROMPT_KEY = "git-curriculo:web:profile-prompt";
 const LOCAL_CUSTOM_RULES_KEY = "git-curriculo:web:custom-rules";
+const LOCAL_RESUME_REPOS_KEY = "git-curriculo:resume-repos";
+
+const LOCAL_REGENERATE_NOTES_KEY = "git-curriculo:web:regenerate-notes";
+const LOCAL_COVER_REGENERATE_NOTES_KEY = "git-curriculo:web:cover-regenerate-notes";
+
+function loadResumeRepoNames(): string[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_RESUME_REPOS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 const resolveSecret = async (
   plain: string,
@@ -47,193 +78,6 @@ const resolveSecret = async (
   }
   return secureStorage.decryptSecret(encrypted, passphrase);
 };
-
-// Synonym map so "ts" matches "typescript", "k8s" matches "kubernetes", etc.
-// Keys and values are normalised (output of normalizeKeyword).
-const TECH_SYNONYMS: Record<string, string[]> = {
-  javascript: ["js", "ecmascript", "es6", "es2015", "es2020", "es2022", "react", "vue", "angular", "next", "nextjs"],
-  typescript: ["ts"],
-  react: ["reactjs", "jsx", "tsx", "next", "nextjs"],
-  node: ["nodejs"],
-  next: ["nextjs"],
-  vue: ["vuejs"],
-  angular: ["angularjs"],
-  postgresql: ["postgres", "pg", "psql"],
-  mongodb: ["mongo"],
-  kubernetes: ["k8s"],
-  docker: ["dockerfile", "container", "containerization"],
-  git: ["github", "gitlab", "bitbucket", "versionamento", "repositorio"],
-  // HTML is implied by any modern frontend framework or templating
-  html: ["html5", "react", "reactjs", "jsx", "tsx", "vue", "angular", "next", "nextjs", "handlebars", "ejs", "pug"],
-  // CSS is implied by any styling framework/tool
-  css: ["css3", "sass", "scss", "stylus", "tailwind", "tailwindcss", "tachyons", "styled-components", "emotion"],
-  // Tachyons is a utility-first CSS framework — equivalent to Tailwind/SCSS proficiency
-  tachyons: ["tailwind", "tailwindcss", "css", "sass", "scss", "styled-components"],
-  python: ["py", "django", "flask", "fastapi"],
-  java: ["spring", "springboot"],
-  cicd: ["github actions", "gitlab ci", "jenkins", "travis", "circle ci"],
-  api: ["rest", "restful", "graphql", "grpc", "websocket", "webhook"],
-  aws: ["amazon web services", "ec2", "s3", "lambda", "cloudfront"],
-  gcp: ["google cloud"],
-  sql: ["mysql", "sqlite", "mariadb", "mssql"],
-  agile: ["scrum", "kanban", "sprint"],
-  testing: ["jest", "vitest", "cypress", "playwright", "tdd", "bdd"],
-  redis: ["cache", "caching"],
-  linux: ["unix", "bash", "shell", "cli"],
-};
-
-function skillInText(skill: string, normText: string): boolean {
-  if (normText.includes(skill)) return true;
-  return (TECH_SYNONYMS[skill] ?? []).some(s => normText.includes(s));
-}
-
-// Extracts a broad keyword set from job description text.
-function extractBroadKeywords(text: string): string[] {
-  const norm = normalizeKeyword(text);
-  const tech = extractKeywords(text);
-
-  const extra = (norm.match(
-    /\b(?:senior|junior|pleno|lead|lider|architect|engineer|engenheiro|developer|desenvolvedor|front.?end|back.?end|full.?stack|mobile|devops|cloud|agile|scrum|kanban|sprint|ci.?cd|deploy|pipeline|git|api|rest|graphql|microservice|monolito|design.?system|component|pwa|ssr|seo|performance|acessibilidade|accessibility|responsiv|escalabilidade|scalab|observabilidade|monitoring|logging|testing|unit|integration|e2e|refactor|code.?review|docker|container|linux|clean.?code|solid|dry|kiss|tdd|bdd|comunicacao|lideranca|autonomia|proatividade|colaboracao|problem.?solving|qualidade|seguranca)\b/g
-  ) ?? []);
-
-  const stopwords = new Set([
-    "para","com","que","uma","mais","dos","das","nas","nos","aos","pelo","pela",
-    "seus","suas","from","with","and","the","are","will","this","that","our",
-    "all","not","can","tem","ser","seu","sua","por","ter","vai","ele","ela",
-    "todo","como","sobre","vaga","buscamos","voce","entre","cada","deve","isso",
-    "outro","pois","bem","sido","esta","fazer","fica","sempre","muito","tambem",
-    "sendo","quando","ainda","mesmo","qual","quem","onde","type","util","area",
-  ]);
-  const words = norm.match(/\b[a-z][a-z0-9]{3,}\b/g) ?? [];
-  const freq = new Map<string, number>();
-  for (const w of words) {
-    if (!stopwords.has(w)) freq.set(w, (freq.get(w) ?? 0) + 1);
-  }
-  const frequent = [...freq.entries()]
-    .filter(([, c]) => c >= 2)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 25)
-    .map(([w]) => w);
-
-  return unique([...tech, ...extra, ...frequent]).slice(0, 80);
-}
-
-// Dynamic dimension weights based on what the job actually demands.
-// Senior/lead role → achievements matter more. Metrics-driven → metrics weight up.
-// Many required skills → keyword coverage matters more.
-function computeJobWeights(jobFullText: string, requiredCount: number) {
-  const j = normalizeKeyword(jobFullText);
-  const isSenior = /\b(?:senior|lead|lider|principal|staff|arquiteto|gerente|manager|head|coordenador)\b/.test(j);
-  const isMetricsDriven = /\b(?:okr|kpi|conversao|receita|roi|cac|ltv|mrr|reducao|crescimento|resultado|performance)\b/.test(j);
-  const manySkills = requiredCount >= 7;
-  // Base: kw=40, achieve=25, role=20, struct=15 (sum=100)
-  let kw = 40, ach = 25, rol = 20, str = 15;
-  if (isSenior)        { ach += 5;  kw  -= 5; }
-  if (isMetricsDriven) { ach += 5;  str -= 5; }
-  if (manySkills)      { kw  += 5;  rol -= 5; }
-  if (str < 10)        { ach -= (10 - str); str = 10; }
-  return { kw, ach, rol, str };
-}
-
-// ─── Multi-dimensional ATS scoring ────────────────────────────────────────────
-// Weights per dimension are dynamic (see computeJobWeights) and sum to 100.
-function scoreMarkdownAgainstJob(
-  markdownText: string,
-  requiredSkills: string[],
-  allKeywords: string[],
-  jobFullText = ""
-): { score: number; matchedKeywords: string[]; missingKeywords: string[]; suggestions: string[]; evidence: string[] } {
-  const W = computeJobWeights(jobFullText, requiredSkills.length);
-  const norm = normalizeKeyword(markdownText);
-  const lines = markdownText.split("\n");
-  const bulletLines = lines.filter(l => /^\s*[-*•]/.test(l));
-
-  // ── 1. KEYWORD COVERAGE (W.kw pts) ──────────────────────────────────
-  const normRequired = unique(requiredSkills.map(normalizeKeyword));
-  const normAll = unique([...normRequired, ...allKeywords.map(normalizeKeyword)]);
-
-  const matchedAll = normAll.filter(kw => skillInText(kw, norm));
-  const missingAll = normAll.filter(kw => !skillInText(kw, norm));
-  const reqMatched = normRequired.filter(s => skillInText(s, norm));
-  const reqCoverage = reqMatched.length / Math.max(normRequired.length, 1);
-
-  const optCount = Math.max(normAll.length - normRequired.length, 0);
-  const optMatched = Math.max(matchedAll.length - reqMatched.length, 0);
-  const optCoverage = optCount > 0 ? optMatched / optCount : 1;
-
-  const bulletText = normalizeKeyword(bulletLines.join(" "));
-  const reqInBullets = normRequired.filter(s => skillInText(s, bulletText)).length;
-  const contextRatio = normRequired.length > 0 ? reqInBullets / normRequired.length : 1;
-
-  // Scale sub-weights proportionally to W.kw
-  const kwRaw = reqCoverage * (W.kw * 0.625) + optCoverage * (W.kw * 0.25) + contextRatio * (W.kw * 0.125);
-  const kwScore = Math.round(kwRaw);
-
-  // ── 2. ACHIEVEMENT QUALITY (W.ach pts) ──────────────────────────────
-  // Metrics are a bonus: baseline is W.ach * 0.5 for having detailed bullets; full score at ~50% ratio
-  const bulletsWithMetrics = bulletLines.filter(l => /\d+/.test(l));
-  const metricRatio = bulletLines.length > 0 ? bulletsWithMetrics.length / bulletLines.length : 0;
-  const baselineAch = W.ach * 0.5; // everyone gets 50% for having bullets at all
-  const metricBonus = Math.min(W.ach * 0.5, metricRatio * W.ach);
-  const achievementScore = bulletLines.length > 0 ? Math.round(baselineAch + metricBonus) : 0;
-
-  // ── 3. ROLE FIT (W.rol pts) ─────────────────────────────────────────
-  let roleKwScore = 0;
-  if (jobFullText) {
-    const jobKws = extractBroadKeywords(jobFullText);
-    const jobKwMatched = jobKws.filter(kw => skillInText(normalizeKeyword(kw), norm));
-    roleKwScore = Math.round((jobKwMatched.length / Math.max(jobKws.length, 1)) * W.rol);
-  } else {
-    roleKwScore = Math.round(reqCoverage * W.rol);
-  }
-
-  // Seniority is only a bonus — not having it never penalizes (relevant for junior roles)
-  const seniorityMatches = (markdownText.match(
-    /\b(?:senior|sr\.|lead|lider|principal|staff|arquiteto|architect|tech lead|coordenador|gerente)\b/gi
-  ) ?? []).length;
-  const seniorityBonus = Math.min(5, seniorityMatches * 2);
-
-  const roleScore = Math.min(W.rol + 5, roleKwScore + seniorityBonus);
-
-  // ── 4. STRUCTURE (W.str pts) ────────────────────────────────────────
-  const hasSummary    = /##\s*(?:resumo|summary|perfil|sobre)/i.test(markdownText);
-  const hasExperience = /##\s*(?:experi[eê]ncia|experience|historico)/i.test(markdownText);
-  const hasSkillsSec  = /##\s*(?:skills|habilidades|tecnologias|competencias|stack)/i.test(markdownText);
-  const hasContact    = /(?:@[a-z]|linkedin\.com|github\.com|\(\d{2}\)\s*\d|\+55)/i.test(markdownText);
-  const hasProjects   = /##\s*(?:projetos|projects)/i.test(markdownText);
-  const hasThirdPerson = /\b(?:desenvolveu|implementou|liderou|criou|otimizou|refatorou|conduziu|melhorou|reduziu|automatizou)\b/i.test(markdownText);
-
-  const sectionPoints = ((hasSummary ? 3 : 0) + (hasExperience ? 3 : 0) + (hasSkillsSec ? 2 : 0)
-    + (hasContact ? 3 : 0) + (hasProjects ? 2 : 0)); // max 13 out of 13
-  const formatScore = Math.min(W.str, Math.round((sectionPoints / 13) * W.str));
-
-  // ── TOTAL ────────────────────────────────────────────────────────────
-  const score = Math.min(100, Math.max(0, kwScore + achievementScore + roleScore + formatScore));
-
-  // ── SUGGESTIONS (ordered by score impact) ────────────────────────────
-  const suggestions: string[] = [];
-  const reqMissing = normRequired.filter(s => !skillInText(s, norm));
-  if (reqMissing.length > 0)
-    suggestions.push(`Skills obrigatorias ausentes: ${reqMissing.slice(0, 5).join(", ")}`);
-  // Only show optional/extra missing keywords that aren't already listed as required
-  const extraMissing = missingAll.filter(k => !reqMissing.includes(k));
-  if (extraMissing.length > 0)
-    suggestions.push(`Keywords desejadas ausentes: ${extraMissing.slice(0, 4).join(", ")}`);
-  if (contextRatio < 0.5 && normRequired.length > 0 && reqMissing.length === 0)
-    suggestions.push("Skills da vaga pouco contextualizadas nos bullets de experiencia");
-  if (!hasSummary) suggestions.push("Adicione ## Resumo com posicionamento direto para esta vaga");
-  if (!hasProjects) suggestions.push("Adicione ## Projetos com projetos relevantes para a vaga");
-
-  // ── EVIDENCE — score breakdown per dimension ─────────────────────────
-  const evidence = [
-    `Keywords (${kwScore}/${W.kw}): ${reqMatched.length}/${normRequired.length} obrigatorias · ${optMatched}/${optCount} opcionais · ${reqInBullets} em bullets de exp.`,
-    `Conquistas (${achievementScore}/${W.ach}): ${bulletsWithMetrics.length}/${bulletLines.length} bullets com metricas`,
-    `Aderencia (${roleScore}/${W.rol}): ${roleKwScore} cobertura vocab. vaga · ${seniorityMatches} sinais de senioridade`,
-    `Estrutura (${formatScore}/${W.str}): ${[hasSummary && "Resumo", hasExperience && "Exp", hasSkillsSec && "Skills", hasContact && "Contato", hasProjects && "Projetos"].filter(Boolean).join(" · ") || "incompleta"}`,
-  ];
-
-  return { score, matchedKeywords: matchedAll, missingKeywords: missingAll.slice(0, 25), suggestions: suggestions.slice(0, 6), evidence };
-}
 
 function downloadText(fileName: string, content: string): void {
   const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
@@ -254,124 +98,6 @@ function downloadBlob(fileName: string, blob: Blob): void {
   URL.revokeObjectURL(url);
 }
 
-function renderInline(text: string): string {
-  const S = "color:var(--gc-accent);text-decoration:underline;text-underline-offset:2px";
-
-  function esc(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-
-  type Pat = { re: RegExp; toHtml: (m: RegExpMatchArray) => string };
-  const patterns: Pat[] = [
-    // Markdown links [label](url) — must come first so email/url patterns never see the href
-    {
-      re: /\[([^\]]+)\]\((https?:\/\/[^)]+|mailto:[^)]+)\)/,
-      toHtml: m => `<a href="${m[2]!}" target="_blank" rel="noopener noreferrer" style="${S}">${esc(m[1]!)}</a>`
-    },
-    { re: /\*\*(.+?)\*\*/, toHtml: m => `<strong>${esc(m[1]!)}</strong>` },
-    { re: /\*(.+?)\*/, toHtml: m => `<em>${esc(m[1]!)}</em>` },
-    { re: /`(.+?)`/, toHtml: m => esc(m[1]!) },
-    {
-      re: /https?:\/\/[^\s<>"&)]+/,
-      toHtml: m => `<a href="${m[0]}" target="_blank" rel="noopener noreferrer" style="${S}">${esc(m[0])}</a>`
-    },
-    {
-      re: /(?:github\.com|linkedin\.com)\/[\w\-./#?=&%]+/,
-      toHtml: m => `<a href="https://${m[0]}" target="_blank" rel="noopener noreferrer" style="${S}">${esc(m[0])}</a>`
-    },
-    {
-      re: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/,
-      toHtml: m => `<a href="mailto:${m[0]}" style="${S}">${esc(m[0])}</a>`
-    },
-  ];
-
-  let out = "";
-  let rem = text;
-  while (rem.length > 0) {
-    let best: { index: number; m: RegExpMatchArray; p: Pat } | null = null;
-    for (const p of patterns) {
-      const m = rem.match(p.re);
-      if (m && m.index !== undefined && (!best || m.index < best.index)) {
-        best = { index: m.index, m, p };
-      }
-    }
-    if (!best) { out += esc(rem); break; }
-    if (best.index > 0) out += esc(rem.slice(0, best.index));
-    out += best.p.toHtml(best.m);
-    rem = rem.slice(best.index + best.m[0].length);
-  }
-  return out;
-}
-
-function MarkdownPreview({ content }: { content: string }) {
-  const lines = content.split("\n");
-  const nodes: React.ReactNode[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-
-    if (line.startsWith("# ")) {
-      nodes.push(
-        <h1 key={i} className="text-xl font-bold text-[var(--gc-text)] mb-0.5 mt-0">
-          {line.slice(2)}
-        </h1>
-      );
-    } else if (line.startsWith("## ")) {
-      nodes.push(
-        <h2 key={i} className="text-[15px] font-bold text-[var(--gc-text)] border-b border-[var(--gc-border)] pb-1 mt-5 mb-2">
-          {line.slice(3)}
-        </h2>
-      );
-    } else if (line.startsWith("### ")) {
-      nodes.push(
-        <h3 key={i} className="text-[12px] font-semibold text-[var(--gc-text)] mt-2.5 mb-0.5">
-          {line.slice(4)}
-        </h3>
-      );
-    } else if (/^[-*•] /.test(line)) {
-      const bullets: string[] = [];
-      while (i < lines.length && /^[-*•] /.test(lines[i] ?? "")) {
-        bullets.push((lines[i] ?? "").replace(/^[-*•] /, ""));
-        i++;
-      }
-      nodes.push(
-        <ul key={`ul-${i}`} className="my-0.5 space-y-0.5 pl-4">
-          {bullets.map((b, j) => (
-            <li
-              key={j}
-              className="text-[12px] text-[var(--gc-text)] leading-snug list-disc marker:text-[var(--gc-text-muted)]"
-              dangerouslySetInnerHTML={{ __html: renderInline(b) }}
-            />
-          ))}
-        </ul>
-      );
-      continue;
-    } else if (line.trim()) {
-      nodes.push(
-        <p
-          key={i}
-          className="text-[12px] text-[var(--gc-text)] leading-snug mb-0.5"
-          dangerouslySetInnerHTML={{ __html: renderInline(line) }}
-        />
-      );
-    } else {
-      nodes.push(<div key={i} className="h-1" />);
-    }
-
-    i++;
-  }
-
-  return (
-    <div
-      className="font-sans px-6 py-5"
-      style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}
-    >
-      {nodes}
-    </div>
-  );
-}
-
 export default function App(): JSX.Element {
   const [jobText, setJobText] = useState(() => localStorage.getItem(LOCAL_JOB_TEXT_KEY) ?? "");
   const [profilePrompt, setProfilePrompt] = useState(() => localStorage.getItem(LOCAL_PROFILE_PROMPT_KEY) ?? "");
@@ -382,12 +108,24 @@ export default function App(): JSX.Element {
   const [statusMessage, setStatusMessage] = useState("");
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
   const [customRules, setCustomRules] = useState(() => localStorage.getItem(LOCAL_CUSTOM_RULES_KEY) ?? "");
+  const [regenerateNotes, setRegenerateNotes] = useState(() => localStorage.getItem(LOCAL_REGENERATE_NOTES_KEY) ?? "");
+  const [coverRegenerateNotes, setCoverRegenerateNotes] = useState(
+    () => localStorage.getItem(LOCAL_COVER_REGENERATE_NOTES_KEY) ?? ""
+  );
   const [streamingMarkdown, setStreamingMarkdown] = useState("");
   const [editedMarkdown, setEditedMarkdown] = useState("");
+  const [resumeSourceMarkdown, setResumeSourceMarkdown] = useState("");
+  const [aiAtsPromptBlock, setAiAtsPromptBlock] = useState("");
+  const [atsBlueprint, setAtsBlueprint] = useState<AtsBlueprint | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [copiedMd, setCopiedMd] = useState(false);
   const [previewMode, setPreviewMode] = useState<"raw" | "preview">("raw");
-  const [view, setView] = useQueryState("view", parseAsString.withDefault("dashboard"));
+  const [coverLetterMarkdown, setCoverLetterMarkdown] = useState("");
+  const [isGeneratingCoverLetter, setIsGeneratingCoverLetter] = useState(false);
+  const [contentTab, setContentTab] = useState<"resume" | "cover-letter">("resume");
+  const [view, setView] = useQueryState("view", parseAsString.withDefault("overview"));
+  const [selectedRepo, setSelectedRepo] = useQueryState("repo", parseAsString);
+  const [resumeRepoNames, setResumeRepoNames] = useState<string[]>(loadResumeRepoNames);
 
   const authPopupRef = useRef<Window | null>(null);
   const popupWatcherRef = useRef<number | null>(null);
@@ -507,7 +245,39 @@ export default function App(): JSX.Element {
     localStorage.setItem(LOCAL_CUSTOM_RULES_KEY, customRules);
   }, [customRules]);
 
-  const syncGitHubDataWithToken = async (tokenValue?: string): Promise<void> => {
+  useEffect(() => {
+    localStorage.setItem(LOCAL_REGENERATE_NOTES_KEY, regenerateNotes);
+  }, [regenerateNotes]);
+
+  useEffect(() => {
+    localStorage.setItem(LOCAL_COVER_REGENERATE_NOTES_KEY, coverRegenerateNotes);
+  }, [coverRegenerateNotes]);
+
+  useEffect(() => {
+    localStorage.setItem(LOCAL_RESUME_REPOS_KEY, JSON.stringify(resumeRepoNames));
+  }, [resumeRepoNames]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    setResumeRepoNames(prev => {
+      const valid = prev.filter(name => snapshot.repos.some(r => r.name === name));
+      return valid.length === prev.length ? prev : valid;
+    });
+  }, [snapshot]);
+
+  const resumeReposForGeneration = resumeRepoNames.length > 0 ? resumeRepoNames : undefined;
+
+  const toggleResumeRepo = (repoName: string, include: boolean): void => {
+    setResumeRepoNames(prev => {
+      if (include) return unique([...prev, repoName]);
+      return prev.filter(name => name !== repoName);
+    });
+  };
+
+  const syncGitHubDataWithToken = async (
+    tokenValue?: string,
+    options?: { forceFull?: boolean }
+  ): Promise<void> => {
     setLoading(true);
     setError(null);
     try {
@@ -518,10 +288,32 @@ export default function App(): JSX.Element {
 
       if (!token) throw new Error("Faca login com GitHub para sincronizar.");
 
-      const since = settings.lastSyncAt ?? undefined;
-      setStatusMessage(since ? `Buscando dados novos desde ${new Date(since).toLocaleDateString("pt-BR")}...` : "Sincronizacao inicial (24 meses)...");
+      const since = options?.forceFull ? undefined : (settings.lastSyncAt ?? undefined);
+      setStatusMessage(
+        options?.forceFull
+          ? "Sincronizacao completa (24 meses) — buscando todos os repositorios..."
+          : since
+            ? `Buscando dados novos desde ${new Date(since).toLocaleDateString("pt-BR")}...`
+            : "Sincronizacao inicial (24 meses)..."
+      );
 
-      const incrementalSnapshot = await syncService.runManualSync({ token, since });
+      const incrementalSnapshot = await syncService.runManualSync({
+        token,
+        since,
+        deepseekApiKey: await resolveSecret(
+          deepseekApiKey,
+          settings.deepseekApiKeyEncrypted,
+          passphrase,
+          secureStorage
+        ),
+        onProgress: (progress) => {
+          setSyncStatus({
+            ...syncService.getLastSyncStatus(),
+            stage: "running",
+            progress
+          });
+        }
+      });
       const existingSnapshot = snapshot ?? (await sqliteStorage.getLatestSnapshot());
       const finalSnapshot = existingSnapshot
         ? syncService.mergeSnapshots(existingSnapshot, incrementalSnapshot)
@@ -537,6 +329,11 @@ export default function App(): JSX.Element {
       setMetrics(profileMetrics);
       setSyncStatus(syncService.getLastSyncStatus());
 
+      const persistWarning = sqliteStorage.getPersistWarning();
+      if (persistWarning) {
+        setError(persistWarning);
+      }
+
       const now = new Date().toISOString();
       const updatedSettings = localStateStorage.loadSettings();
       updatedSettings.lastSyncAt = now;
@@ -544,7 +341,9 @@ export default function App(): JSX.Element {
       setLastSyncAt(now);
 
       const status = syncService.getLastSyncStatus();
-      setStatusMessage(`+${status.syncedCommits} commits, +${status.syncedPullRequests} PRs, +${status.syncedIssues} issues em ${status.syncedRepos} repos atualizados.`);
+      setStatusMessage(
+        `${options?.forceFull ? "Sync completa:" : "Sync incremental:"} +${status.syncedCommits} commits, +${status.syncedPullRequests} PRs, +${status.syncedIssues} issues em ${status.syncedRepos} repos. Total: ${finalSnapshot.repos.length} repos, ${finalSnapshot.commits.length} commits.`
+      );
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : "Erro de sincronizacao.");
       setSyncStatus(syncService.getLastSyncStatus());
@@ -684,15 +483,29 @@ export default function App(): JSX.Element {
     setStatusMessage("Segredos removidos do estado atual e do armazenamento local.");
   };
 
-  const analyzeAndGenerateResume = async (extraRules?: string): Promise<void> => {
-    const isFirstGeneration = !resume; // capture before reset — regeneration keeps current ATS until streaming updates
-    setLoading(true);
+  const analyzeAndGenerateResume = async (options?: {
+    extraRules?: string;
+    regenerate?: boolean;
+    baseMarkdown?: string;
+    blueprintOverride?: AtsBlueprint;
+  }): Promise<void> => {
+    const extraRules = options?.extraRules;
+    const isRegeneration = options?.regenerate ?? Boolean(extraRules?.includes("REESCRITA CIRURGICA"));
+    const isFirstGeneration = !resume && !isRegeneration;
+    const previousMarkdown = options?.baseMarkdown ?? editedMarkdown;
+    const iterationBlueprint = options?.blueprintOverride ?? atsBlueprint ?? undefined;
+
     setIsStreaming(true);
     setError(null);
-    setStreamingMarkdown("");
-    setEditedMarkdown("");
-    setResume(null);
-    if (isFirstGeneration) setAts(null);
+    void setView("curriculo");
+    if (!isRegeneration) {
+      setStreamingMarkdown("");
+      setEditedMarkdown("");
+      setResume(null);
+      if (isFirstGeneration) setAts(null);
+    } else {
+      setStreamingMarkdown(previousMarkdown);
+    }
     try {
       if (!snapshot || !metrics) {
         throw new Error("Execute a sincronizacao do GitHub antes de gerar curriculo.");
@@ -717,102 +530,285 @@ export default function App(): JSX.Element {
       const resumeService = new ResumeService(
         new DeepSeekResumeProvider({ apiKey: resolvedDeepseekApiKey })
       );
+      const aiAts = new AiAtsAnalyzer({ apiKey: resolvedDeepseekApiKey });
 
       const jobSpec = resumeService.parseJobText(jobText);
 
-      // Pre-build the keyword pool once so the streaming callback is cheap
-      const allAtsKeywords = unique([
-        ...jobSpec.requiredSkills,
-        ...jobSpec.preferredSkills,
-        ...jobSpec.keywords,
-        ...extractKeywords(jobSpec.summary),
-        ...extractKeywords(jobSpec.responsibilities.join(" "))
-      ]).map(normalizeKeyword);
+      setAts({
+        score: 0,
+        matchedKeywords: [],
+        missingKeywords: [],
+        suggestions: [],
+        evidence: ["Fase 1/3: IA criando blueprint ATS (JSON)..."],
+        evidencedKeywords: [],
+        gapsInResume: [],
+        unavailableKeywords: []
+      });
 
-      // Step 1 — initial ATS from GitHub profile only on first generation
-      if (isFirstGeneration) {
-        const initialAts = metricsService.computeAtsScore({ jobSpec, profileMetrics: metrics });
-        setAts(initialAts);
+      let profileAnalysis: {
+        ats: AtsAnalysis;
+        blueprint: AtsBlueprint;
+        promptBlock: string;
+      };
+
+      if (isRegeneration && iterationBlueprint) {
+        profileAnalysis = {
+          blueprint: iterationBlueprint,
+          ats: atsAnalysisFromBlueprint(iterationBlueprint),
+          promptBlock: blueprintToPromptBlock(iterationBlueprint)
+        };
+      } else {
+        profileAnalysis = await aiAts.analyzeProfileForJob({
+          jobSpec,
+          jobFullText: jobText,
+          profileSnapshot: snapshot,
+          profilePrompt,
+          resumeRepoNames: resumeReposForGeneration
+        });
       }
 
-      // Step 2 — stream the resume; update ATS live from the building text
-      let lastAtsLen = 0;
-      // Auto-rules derived from the job spec — injected on every generation to maximize first-pass quality
-      const autoAtsRules = [
-        "OTIMIZACAO ATS AUTOMATICA — aplique em toda geracao sem excecao:",
-        `Skills obrigatorias da vaga — mencione em bullets de experiencia SOMENTE se o candidato tem experiencia real e comprovada com elas (nao invente): ${jobSpec.requiredSkills.join(", ")}`,
-        `Skills desejadas — mencione apenas onde o candidato realmente as utilizou: ${jobSpec.preferredSkills.slice(0, 8).join(", ")}`,
-        "Pelo menos 70% dos bullets devem conter numeros concretos derivados de dados reais (commits, PRs, tempo, escala real). PROIBIDO inventar numeros.",
-        "Varie a estrutura dos bullets: resultado em destaque, tecnologia em foco, contexto/problema, descricao arquitetural (maximo 35% iniciando com verbo).",
-      ].join("\n");
+      setAtsBlueprint(profileAnalysis.blueprint);
+      setAiAtsPromptBlock(profileAnalysis.promptBlock);
+
+      if (isFirstGeneration) {
+        setAts({
+          ...profileAnalysis.ats,
+          evidence: [
+            "Blueprint ATS criado — Fase 2/3: gerando curriculo alinhado ao plano...",
+            ...profileAnalysis.ats.evidence.slice(0, 4)
+          ],
+          blueprint: profileAnalysis.blueprint
+        });
+      }
+
+      let fullGeneratedMarkdown = previousMarkdown;
+      const mandatoryKeywords = profileAnalysis.blueprint.evidencedKeywords;
+      const omitSkillsRule = /tir.{0,20}(skills?|habilidades)|sem.{0,20}(skills?|habilidades)/i.test(customRules);
+      const mergedRules = blueprintToGenerationRules(profileAnalysis.blueprint, {
+        jobSpec,
+        resumeRepoNames: resumeReposForGeneration,
+        omitSkillsRule,
+        customRules,
+        extraRules: extraRules?.trim()
+      });
+
+      setAts({
+        score: 0,
+        matchedKeywords: [],
+        missingKeywords: [],
+        suggestions: [],
+        evidence: ["Fase 2/3: gerando curriculo encaixado no blueprint ATS..."],
+        evidencedKeywords: profileAnalysis.blueprint.evidencedKeywords,
+        gapsInResume: profileAnalysis.blueprint.evidencedKeywords,
+        unavailableKeywords: profileAnalysis.blueprint.unavailableKeywords,
+        blueprint: profileAnalysis.blueprint
+      });
 
       const generatedResume = await resumeService.streamResume(
         {
           jobSpec,
           profileSnapshot: snapshot,
           profilePrompt,
-          customRules: [autoAtsRules, extraRules?.trim(), customRules.trim()].filter(Boolean).join("\n\n") || undefined,
-          locale: "pt-BR"
+          customRules: mergedRules || undefined,
+          locale: "pt-BR",
+          resumeRepoNames: resumeReposForGeneration
         },
         (accumulated) => {
+          fullGeneratedMarkdown = accumulated;
           setStreamingMarkdown(accumulated);
-          // Throttle ATS refresh: recompute every 400 chars to avoid excessive renders
-          if (accumulated.length - lastAtsLen >= 400) {
-            lastAtsLen = accumulated.length;
-            const live = scoreMarkdownAgainstJob(accumulated, jobSpec.requiredSkills, allAtsKeywords, jobText);
-            setAts({ ...live, evidence: ["Analise ao vivo — curriculo em construcao..."] });
-          }
         }
       );
 
-      // Step 3 — final ATS pass on the complete, clean resume text
       const cleanMd = generatedResume.rawMarkdown ?? "";
-      const nonEmptyLines = cleanMd.split("\n").filter(l => l.trim()).length;
-      const finalAts = scoreMarkdownAgainstJob(cleanMd, jobSpec.requiredSkills, allAtsKeywords, jobText);
-      setAts(finalAts);
+      let atsSearchText = fullGeneratedMarkdown || cleanMd;
+      const atsEvidence = profileAnalysis.blueprint.keywordEvidence.map(
+        entry => `${entry.source}: ${entry.keyword} — ${entry.hint}`
+      );
+
+      for (let weavePass = 0; weavePass < 2; weavePass++) {
+        const missingAfterGeneration = findMissingEvidencedKeywords(
+          mandatoryKeywords,
+          atsSearchText
+        );
+        if (missingAfterGeneration.length === 0) break;
+
+        setAts({
+          score: profileAnalysis.ats.score,
+          matchedKeywords: profileAnalysis.ats.matchedKeywords,
+          missingKeywords: profileAnalysis.ats.missingKeywords,
+          suggestions: profileAnalysis.ats.suggestions,
+          evidence: [
+            weavePass === 0
+              ? "Ajustando curriculo ao blueprint (weave passagem 1)..."
+              : "Ajuste fino ao blueprint (weave passagem 2)..."
+          ],
+          evidencedKeywords: profileAnalysis.blueprint.evidencedKeywords,
+          gapsInResume: missingAfterGeneration,
+          unavailableKeywords: profileAnalysis.blueprint.unavailableKeywords,
+          blueprint: profileAnalysis.blueprint
+        });
+
+        const weaveHints = filterEvidenceByRepos(
+          evidenceHintsForKeywords(atsEvidence, missingAfterGeneration),
+          resumeReposForGeneration
+        );
+
+        atsSearchText = await resumeService.weaveMissingAtsKeywords(
+          {
+            resumeMarkdown: atsSearchText,
+            missingKeywords: missingAfterGeneration,
+            profileSnapshot: snapshot,
+            profilePrompt,
+            customRules: mergedRules || undefined,
+            resumeRepoNames: resumeReposForGeneration,
+            locale: "pt-BR",
+            evidenceHints: weaveHints
+          },
+          accumulated => {
+            atsSearchText = accumulated;
+            setStreamingMarkdown(accumulated);
+          }
+        );
+        atsSearchText = sanitizeResumeMarkdown(atsSearchText, {
+          allowedProjectRepos: resumeReposForGeneration,
+          profilePrompt,
+          jobSpec
+        });
+        generatedResume.rawMarkdown = atsSearchText;
+        setEditedMarkdown(atsSearchText);
+        setStreamingMarkdown(atsSearchText);
+      }
+
+      const preQuality = analyzeResumeQuality(atsSearchText, { jobSpec, jobFullText: jobText });
+      const credibilityScore =
+        preQuality.dimensions.find(d => d.id === "credibility")?.score ?? 100;
+      if (preQuality.metricPct < 65 || preQuality.overallScore < 72 || credibilityScore < 65) {
+        setAts({
+          score: profileAnalysis.ats.score,
+          matchedKeywords: profileAnalysis.ats.matchedKeywords,
+          missingKeywords: profileAnalysis.ats.missingKeywords,
+          suggestions: preQuality.suggestions,
+          evidence: [
+            credibilityScore < 65
+              ? `Credibilidade ${credibilityScore}% — removendo percentuais inventados e polindo bullets...`
+              : `Qualidade atual: ${preQuality.overallScore}% — polindo bullets (${preQuality.bulletsWithMetrics}/${preQuality.totalBullets} com metricas)...`
+          ],
+          evidencedKeywords: profileAnalysis.blueprint.evidencedKeywords,
+          gapsInResume: findMissingEvidencedKeywords(mandatoryKeywords, atsSearchText),
+          unavailableKeywords: profileAnalysis.blueprint.unavailableKeywords,
+          blueprint: profileAnalysis.blueprint
+        });
+
+        atsSearchText = await resumeService.polishResumeQuality(
+          {
+            resumeMarkdown: atsSearchText,
+            profileSnapshot: snapshot,
+            jobSpec,
+            profilePrompt,
+            customRules: mergedRules || undefined,
+            resumeRepoNames: resumeReposForGeneration,
+            locale: "pt-BR",
+            qualityReport: {
+              weakBullets: preQuality.weakBullets,
+              metricPct: preQuality.metricPct,
+              suggestions: preQuality.suggestions
+            }
+          },
+          accumulated => {
+            atsSearchText = accumulated;
+            setStreamingMarkdown(accumulated);
+          }
+        );
+        atsSearchText = sanitizeResumeMarkdown(atsSearchText, {
+          allowedProjectRepos: resumeReposForGeneration,
+          profilePrompt,
+          jobSpec
+        });
+        generatedResume.rawMarkdown = atsSearchText;
+        setEditedMarkdown(atsSearchText);
+        setStreamingMarkdown(atsSearchText);
+      }
+
+      setAts({
+        score: profileAnalysis.ats.score,
+        matchedKeywords: profileAnalysis.ats.matchedKeywords,
+        missingKeywords: profileAnalysis.ats.missingKeywords,
+        suggestions: profileAnalysis.ats.suggestions,
+        evidence: ["Fase 3/3: IA avaliando curriculo vs blueprint ATS..."],
+        evidencedKeywords: profileAnalysis.blueprint.evidencedKeywords,
+        gapsInResume: profileAnalysis.ats.gapsInResume,
+        unavailableKeywords: profileAnalysis.blueprint.unavailableKeywords,
+        blueprint: profileAnalysis.blueprint
+      });
+
+      const finalAts = await aiAts.evaluateResumeAgainstBlueprint({
+        jobSpec,
+        jobFullText: jobText,
+        profileSnapshot: snapshot,
+        profilePrompt,
+        resumeRepoNames: resumeReposForGeneration,
+        resumeMarkdown: atsSearchText,
+        coverLetterMarkdown: coverLetterMarkdown || undefined,
+        blueprint: profileAnalysis.blueprint
+      });
+
+      const updatedBlueprint = updateBlueprintFromEvaluation(profileAnalysis.blueprint, finalAts);
+      setAtsBlueprint(updatedBlueprint);
+      setAts({ ...finalAts, blueprint: updatedBlueprint });
+
+      generatedResume.atsKeywords = unique([
+        ...(generatedResume.atsKeywords ?? []),
+        ...finalAts.matchedKeywords,
+        ...finalAts.evidencedKeywords
+      ]).slice(0, 50);
 
       setResume(generatedResume);
-      setStreamingMarkdown(cleanMd);
-      setEditedMarkdown(cleanMd);
-      await sqliteStorage.saveMetrics(new Date().toISOString(), finalAts);
+      setResumeSourceMarkdown(atsSearchText);
+      setStreamingMarkdown(atsSearchText);
+      setEditedMarkdown(atsSearchText);
+      await sqliteStorage.saveMetrics(new Date().toISOString(), { ...finalAts, blueprint: updatedBlueprint });
       await sqliteStorage.saveResume(new Date().toISOString(), generatedResume);
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : "Erro ao gerar curriculo.");
     } finally {
-      setLoading(false);
       setIsStreaming(false);
     }
   };
 
   const regenerateWithAts = (): void => {
     if (!ats || !jobText.trim()) return;
-    // Snapshot current state — revert if the regeneration produces a worse score
     const scoreFloor = ats.score;
     const markdownFloor = editedMarkdown;
+    const resumeFloor = resume;
     const atsFloor = ats;
+    const blueprintFloor = atsBlueprint ?? ats.blueprint ?? null;
     const svc = new ResumeService();
     const jobSpec = svc.parseJobText(jobText);
-
-    // Parse current dimension scores from evidence to find the actual bottlenecks
-    const evConquistas = ats.evidence.find(e => e.includes("bullets com metricas")) ?? "";
-    const metricMatch = evConquistas.match(/(\d+)\/(\d+) bullets com metricas/);
-    const bulletsWithNums = metricMatch ? parseInt(metricMatch[1]!) : 0;
-    const totalBullets   = metricMatch ? parseInt(metricMatch[2]!) : 1;
-    const metricPct = Math.round(bulletsWithNums / Math.max(totalBullets, 1) * 100);
-
-    const evRole = ats.evidence.find(e => e.includes("Aderencia")) ?? "";
-    const roleNums = evRole.match(/Aderencia \((\d+)\/(\d+)\)/);
-    const roleActual = roleNums ? parseInt(roleNums[1]!) : 0;
-    const roleMax    = roleNums ? parseInt(roleNums[2]!) : 20;
+    const quality =
+      ats.qualityReport ??
+      analyzeResumeQuality(editedMarkdown, { jobSpec });
+    const metricPct = quality.metricPct;
+    const bulletsWithNums = quality.bulletsWithMetrics;
+    const totalBullets = Math.max(quality.totalBullets, 1);
+    const roleMax = 20;
+    const roleActual = Math.round((quality.roleAdherencePct / 100) * roleMax);
 
     const lines: string[] = [
       `=== REESCRITA CIRURGICA PARA MAXIMIZAR ATS — score atual: ${ats.score}/100 ===`,
       `Meta obrigatoria: ${Math.min(100, ats.score + 20)}+ pontos. Aplique TODAS as regras abaixo sem excecao:`,
+      jobSpec.company ? `Empresa: ${jobSpec.company}` : "",
       "",
     ];
     let n = 1;
 
-    // Gap 1 — Metrics (usually the biggest delta)
+    if (ats.suggestions.length > 0) {
+      lines.push(`${n++}. SUGESTOES ATS IDENTIFICADAS (corrija todas):`);
+      for (const suggestion of ats.suggestions) {
+        lines.push(`   - ${suggestion}`);
+      }
+      lines.push("");
+    }
+
     if (metricPct < 65) {
       lines.push(
         `${n++}. METRICAS [impacto maximo no score — PRIORIDADE 1]:`,
@@ -824,7 +820,6 @@ export default function App(): JSX.Element {
       );
     }
 
-    // Gap 2 — Role fit
     if (roleActual < Math.round(roleMax * 0.65)) {
       const responsibilities = jobSpec.responsibilities.slice(0, 5).join(" | ");
       lines.push(
@@ -837,16 +832,61 @@ export default function App(): JSX.Element {
       );
     }
 
-    // Gap 3 — Missing keywords
-    if (ats.missingKeywords.length > 0) {
+    const gapsToFix =
+      ats.gapsInResume.length > 0 ? ats.gapsInResume : ats.missingKeywords;
+
+    if (gapsToFix.length > 0) {
       lines.push(
-        `${n++}. KEYWORDS AUSENTES — inclua organicamente em bullets (NAO apenas na secao Skills):`,
-        `   ${ats.missingKeywords.slice(0, 14).join(", ")}`,
+        `${n++}. KEYWORDS COM EVIDENCIA NOS PROJETOS — inclua OBRIGATORIAMENTE em bullets de experiencia/projetos:`,
+        `   ${gapsToFix.slice(0, 20).join(", ")}`,
         "",
       );
     }
 
-    // Structural gaps
+    const trulyMissing = ats.unavailableKeywords;
+
+    if (trulyMissing.length > 0) {
+      lines.push(
+        `${n++}. SEM EVIDENCIA NO PERFIL — NAO invente:`,
+        `   ${trulyMissing.slice(0, 12).join(", ")}`,
+        "",
+      );
+    }
+
+    if (aiAtsPromptBlock.trim()) {
+      lines.push(
+        "",
+        "=== MAPEAMENTO ATS IA (reaplicar) ===",
+        aiAtsPromptBlock.trim()
+      );
+    }
+
+    if (customRules.trim()) {
+      lines.push(
+        `${n++}. REGRAS MANUAIS DO CANDIDATO (prioridade maxima — reaplique todas):`,
+        customRules.trim(),
+        "",
+      );
+    }
+
+    if (quality.weakBullets.length > 0) {
+      lines.push(
+        `${n++}. BULLETS FRACOS (reescrever com metricas reais):`,
+        ...quality.weakBullets.slice(0, 5).map(b => `   - ${b}`),
+        ""
+      );
+    }
+
+    if (quality.personalizationPct < 70) {
+      lines.push(
+        `${n++}. PERSONALIZACAO (${quality.personalizationPct}%):`,
+        `   Mencione titulo da vaga e empresa no Resumo/Headline.`,
+        jobSpec.company ? `   Empresa alvo: ${jobSpec.company}` : "",
+        `   Titulo: ${jobSpec.title}`,
+        ""
+      );
+    }
+
     const structureEv = ats.evidence.find(e => e.includes("Estrutura")) ?? "";
     if (!structureEv.includes("Resumo"))  lines.push(`${n++}. Adicione ## Resumo posicionando explicitamente para esta vaga.`);
     if (!structureEv.includes("Projetos")) lines.push(`${n++}. Adicione ## Projetos destacando 2-3 projetos relevantes para a vaga.`);
@@ -864,65 +904,261 @@ export default function App(): JSX.Element {
       "=== FIM DO CURRICULO ATUAL ==="
     );
 
-    // Use setTimeout(0) to read state after React flushes the generation updates
-    void analyzeAndGenerateResume(lines.join("\n")).then(() => {
+    if (regenerateNotes.trim()) {
+      lines.push(
+        "",
+        "=== OBSERVACAO DO CANDIDATO PARA ESTA REFAZER (PRIORIDADE ALTA) ===",
+        regenerateNotes.trim()
+      );
+    }
+
+    const nextBlueprint = blueprintFloor ? updateBlueprintFromEvaluation(blueprintFloor, ats) : null;
+    if (nextBlueprint) setAtsBlueprint(nextBlueprint);
+
+    void analyzeAndGenerateResume({
+      extraRules: lines.join("\n"),
+      regenerate: true,
+      baseMarkdown: editedMarkdown,
+      blueprintOverride: nextBlueprint ?? undefined
+    }).then(() => {
       setTimeout(() => {
         const newAts = useAppStore.getState().ats;
         if (!newAts || newAts.score < scoreFloor) {
           setEditedMarkdown(markdownFloor);
           setStreamingMarkdown(markdownFloor);
+          setResume(resumeFloor);
           setAts(atsFloor);
         }
       }, 0);
     });
   };
 
-  const reanalyzeAts = (): void => {
-    if (!jobText.trim() || !editedMarkdown) return;
-    const svc = new ResumeService();
-    const jobSpec = svc.parseJobText(jobText);
-    const allKeywords = unique([
-      ...jobSpec.requiredSkills,
-      ...jobSpec.preferredSkills,
-      ...jobSpec.keywords,
-      ...extractKeywords(jobSpec.summary),
-      ...extractKeywords(jobSpec.responsibilities.join(" "))
-    ]).map(normalizeKeyword);
-    const result = scoreMarkdownAgainstJob(editedMarkdown, jobSpec.requiredSkills, allKeywords, jobText);
-    setAts(result);
+  const reanalyzeAts = async (): Promise<void> => {
+    if (!jobText.trim() || !editedMarkdown || !snapshot) return;
+    try {
+      const settings = localStateStorage.loadSettings();
+      const resolvedDeepseekApiKey = await resolveSecret(
+        deepseekApiKey,
+        settings.deepseekApiKeyEncrypted,
+        passphrase,
+        secureStorage
+      );
+      if (!resolvedDeepseekApiKey) {
+        throw new Error("Informe a DeepSeek API Key para reanalisar o ATS.");
+      }
+
+      const resumeService = new ResumeService();
+      const jobSpec = resumeService.parseJobText(jobText);
+      const aiAts = new AiAtsAnalyzer({ apiKey: resolvedDeepseekApiKey });
+      const searchText = resumeSourceMarkdown || editedMarkdown;
+
+      const blueprint =
+        atsBlueprint ??
+        ats?.blueprint ??
+        (await aiAts.createAtsBlueprint({
+          jobSpec,
+          jobFullText: jobText,
+          profileSnapshot: snapshot,
+          profilePrompt,
+          resumeRepoNames: resumeReposForGeneration
+        }));
+
+      setAts({
+        score: ats?.score ?? 0,
+        matchedKeywords: ats?.matchedKeywords ?? [],
+        missingKeywords: ats?.missingKeywords ?? [],
+        suggestions: ats?.suggestions ?? [],
+        evidence: ["Reavaliando curriculo vs blueprint ATS..."],
+        evidencedKeywords: ats?.evidencedKeywords ?? [],
+        gapsInResume: ats?.gapsInResume ?? [],
+        unavailableKeywords: ats?.unavailableKeywords ?? [],
+        blueprint
+      });
+
+      const result = await aiAts.evaluateResumeAgainstBlueprint({
+        jobSpec,
+        jobFullText: jobText,
+        profileSnapshot: snapshot,
+        profilePrompt,
+        resumeRepoNames: resumeReposForGeneration,
+        resumeMarkdown: searchText,
+        coverLetterMarkdown: coverLetterMarkdown || undefined,
+        blueprint
+      });
+      const updatedBlueprint = updateBlueprintFromEvaluation(blueprint, result);
+      setAtsBlueprint(updatedBlueprint);
+      setAts({ ...result, blueprint: updatedBlueprint });
+    } catch (reanalyzeError) {
+      setError(reanalyzeError instanceof Error ? reanalyzeError.message : "Erro ao reanalisar ATS.");
+    }
   };
 
   const copyMarkdown = async (): Promise<void> => {
-    const content = editedMarkdown || streamingMarkdown || (resume ? new ResumeService().exportMarkdown(resume) : "");
+    const content =
+      contentTab === "cover-letter"
+        ? coverLetterMarkdown
+        : editedMarkdown || streamingMarkdown || (resume ? new ResumeService().exportMarkdown(resume) : "");
     if (!content) return;
     await navigator.clipboard.writeText(content);
     setCopiedMd(true);
     setTimeout(() => setCopiedMd(false), 2000);
   };
 
+  const regenerateCoverLetter = async (): Promise<void> => {
+    if (!snapshot || !jobText.trim() || !coverLetterMarkdown.trim()) return;
+    const previousLetter = coverLetterMarkdown;
+    setIsGeneratingCoverLetter(true);
+    setError(null);
+    setContentTab("cover-letter");
+    try {
+      const settings = localStateStorage.loadSettings();
+      const resolvedDeepseekApiKey = await resolveSecret(
+        deepseekApiKey,
+        settings.deepseekApiKeyEncrypted,
+        passphrase,
+        secureStorage
+      );
+      if (!resolvedDeepseekApiKey) {
+        throw new Error("Informe a DeepSeek API Key para refazer a carta de apresentacao.");
+      }
+
+      const resumeService = new ResumeService(
+        new DeepSeekResumeProvider({ apiKey: resolvedDeepseekApiKey })
+      );
+      const jobSpec = resumeService.parseJobText(jobText);
+
+      const regenRules = [
+        "=== REFAZER CARTA DE APRESENTACAO (EDICAO, NAO DO ZERO) ===",
+        "Use a carta atual como base e aplique as correcoes abaixo.",
+        "Mantenha tom autentico, entusiasmo pela empresa e conexao com a vaga.",
+        coverRegenerateNotes.trim()
+          ? `Observacao do candidato:\n${coverRegenerateNotes.trim()}`
+          : "",
+        "=== CARTA ATUAL ===",
+        previousLetter,
+        "=== FIM DA CARTA ATUAL ==="
+      ].filter(Boolean).join("\n\n");
+
+      const letter = await resumeService.streamCoverLetter(
+        {
+          jobSpec,
+          profileSnapshot: snapshot,
+          profilePrompt,
+          customRules: regenRules,
+          resumeMarkdown: editedMarkdown || streamingMarkdown,
+          locale: "pt-BR",
+          resumeRepoNames: resumeReposForGeneration
+        },
+        setCoverLetterMarkdown
+      );
+      setCoverLetterMarkdown(letter);
+    } catch (coverLetterError) {
+      setCoverLetterMarkdown(previousLetter);
+      setError(
+        coverLetterError instanceof Error
+          ? coverLetterError.message
+          : "Erro ao refazer carta de apresentacao."
+      );
+    } finally {
+      setIsGeneratingCoverLetter(false);
+    }
+  };
+
+  const generateCoverLetter = async (): Promise<void> => {
+    if (!snapshot || !jobText.trim()) return;
+    setIsGeneratingCoverLetter(true);
+    setError(null);
+    setCoverLetterMarkdown("");
+    setContentTab("cover-letter");
+    try {
+      const settings = localStateStorage.loadSettings();
+      const resolvedDeepseekApiKey = await resolveSecret(
+        deepseekApiKey,
+        settings.deepseekApiKeyEncrypted,
+        passphrase,
+        secureStorage
+      );
+      if (!resolvedDeepseekApiKey) {
+        throw new Error("Informe a DeepSeek API Key para gerar a carta de apresentacao.");
+      }
+
+      const resumeService = new ResumeService(
+        new DeepSeekResumeProvider({ apiKey: resolvedDeepseekApiKey })
+      );
+      const jobSpec = resumeService.parseJobText(jobText);
+      const letter = await resumeService.streamCoverLetter(
+        {
+          jobSpec,
+          profileSnapshot: snapshot,
+          profilePrompt,
+          customRules: customRules.trim() || undefined,
+          resumeMarkdown: editedMarkdown || streamingMarkdown,
+          locale: "pt-BR",
+          resumeRepoNames: resumeReposForGeneration
+        },
+        setCoverLetterMarkdown
+      );
+      setCoverLetterMarkdown(letter);
+    } catch (coverLetterError) {
+      setError(
+        coverLetterError instanceof Error
+          ? coverLetterError.message
+          : "Erro ao gerar carta de apresentacao."
+      );
+    } finally {
+      setIsGeneratingCoverLetter(false);
+    }
+  };
+
   const exportPdf = async (): Promise<void> => {
     if (!resume) return;
     const service = new ResumeService();
-    // Use editedMarkdown so the PDF mirrors exactly what the user sees in the preview
     const markdown = editedMarkdown || resume.rawMarkdown || service.exportMarkdown(resume);
     const now = new Date();
-    const dd = String(now.getDate()).padStart(2, "0");
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const yyyy = now.getFullYear();
-    const safeName = resume.fullName.replace(/[<>:"/\\|?*]/g, "").trim();
-    const parsedTitle = new ResumeService().parseJobText(jobText).title;
-    const safeJob = parsedTitle.replace(/[<>:"/\\|?*]/g, "").trim().slice(0, 50);
-    const docTitle = `${safeName} - ${safeJob} - ${dd}-${mm}-${yyyy}`;
+    const jobSpec = service.parseJobText(jobText);
+    const docTitle = buildPdfDocumentTitle({
+      fullName: resume.fullName,
+      jobTitle: jobSpec.title,
+      company: jobSpec.company,
+      date: now
+    });
     const filename = `${docTitle}.pdf`;
+    const pdfKeywords = unique([
+      ...(ats?.matchedKeywords ?? []),
+      ...jobSpec.requiredSkills,
+      ...jobSpec.keywords
+    ]).slice(0, 40).join(", ");
     downloadBlob(
       filename,
       await service.exportMarkdownPdf(markdown, {
         title: docTitle,
         author: resume.fullName,
-        subject: "Curriculo",
         creator: resume.fullName,
-        keywords: resume.atsKeywords.join(", "),
+        keywords: pdfKeywords,
         description: resume.summary.slice(0, 300)
+      })
+    );
+  };
+
+  const exportCoverLetterPdf = async (): Promise<void> => {
+    if (!coverLetterMarkdown.trim() || !resume) return;
+    const service = new ResumeService();
+    const now = new Date();
+    const jobSpec = service.parseJobText(jobText);
+    const docTitle = buildPdfDocumentTitle({
+      fullName: resume.fullName,
+      jobTitle: jobSpec.title,
+      company: jobSpec.company,
+      suffix: "Carta de Apresentacao",
+      date: now
+    });
+    downloadBlob(
+      `${docTitle}.pdf`,
+      await service.exportMarkdownPdf(coverLetterMarkdown, {
+        title: docTitle,
+        author: resume.fullName,
+        creator: resume.fullName,
+        description: coverLetterMarkdown.slice(0, 300)
       })
     );
   };
@@ -940,8 +1176,14 @@ export default function App(): JSX.Element {
   const topLangs = metrics?.topLanguages.slice(0, 5) ?? [];
   const topRepos = snapshot?.repos
     .slice()
-    .sort((a, b) => b.stargazersCount - a.stargazersCount)
-    .slice(0, 6) ?? [];
+    .sort((a, b) => {
+      const aTime = new Date(a.pushedAt ?? a.updatedAt).getTime();
+      const bTime = new Date(b.pushedAt ?? b.updatedAt).getTime();
+      return bTime - aTime;
+    }) ?? [];
+
+  const selectedRepoProfile =
+    snapshot && selectedRepo ? buildRepoProfile(snapshot, selectedRepo) : null;
 
   const sidebar = (
     <div className="space-y-4">
@@ -1069,11 +1311,30 @@ export default function App(): JSX.Element {
             Entrar com GitHub
           </Button>
         ) : (
-          <Button variant="secondary" className="w-full" size="sm" onClick={() => void syncGitHubDataWithToken()} disabled={loading}>
-            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-            {loading ? "Atualizando..." : lastSyncAt ? "Buscar novidades" : "Sincronizar agora"}
-          </Button>
+          <div className="space-y-2">
+            <Button variant="secondary" className="w-full" size="sm" onClick={() => void syncGitHubDataWithToken()} disabled={loading}>
+              <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+              {loading ? "Atualizando..." : lastSyncAt ? "Buscar novidades" : "Sincronizar agora"}
+            </Button>
+            <Button
+              variant="secondary"
+              className="w-full"
+              size="sm"
+              onClick={() => void syncGitHubDataWithToken(undefined, { forceFull: true })}
+              disabled={loading}
+            >
+              Sincronizacao completa (24 meses)
+            </Button>
+            <p className="text-[10px] text-[var(--gc-text-subtle)]">
+              {deepseekApiKey.trim()
+                ? "DeepSeek ativa: cada repo sera analisado por IA com todos commits e PRs."
+                : "Configure a chave DeepSeek acima para analise completa por IA durante o sync."}
+            </p>
+          </div>
         )}
+        {syncStatus.stage === "running" ? (
+          <SyncProgressPanel progress={syncStatus.progress} />
+        ) : null}
         {statusMessage ? <p className="text-xs text-[var(--gc-text-muted)]">{statusMessage}</p> : null}
         {error ? <p className="text-xs text-[var(--gc-danger)]">{error}</p> : null}
       </div>
@@ -1134,6 +1395,28 @@ export default function App(): JSX.Element {
                 disabled={isStreaming}
               />
             </div>
+            {snapshot ? (
+              <div className="rounded-md border border-[var(--gc-border)] bg-[var(--gc-canvas-subtle)] px-3 py-2.5">
+                <p className="text-xs font-semibold text-[var(--gc-text)]">Projetos no curriculo</p>
+                <p className="mt-1 text-xs text-[var(--gc-text-muted)]">
+                  {resumeRepoNames.length > 0
+                    ? `${resumeRepoNames.length} repo(s) selecionado(s) na Visao geral: ${resumeRepoNames.join(", ")}`
+                    : `Nenhum repo selecionado — secao Projetos usara todos os ${snapshot.repos.length} repos sincronizados`}
+                </p>
+                <p className="mt-1 text-[10px] text-[var(--gc-text-subtle)]">
+                  Stack e keywords ATS sao buscadas em todos os repositorios. Marque ate 3 repos na aba Visao geral para controlar o que aparece em Projetos.
+                </p>
+                {resumeRepoNames.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setResumeRepoNames([])}
+                    className="mt-2 text-[10px] text-[var(--gc-accent)] hover:underline"
+                  >
+                    Limpar selecao (usar todos)
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <div>
               <label className="mb-1 block text-sm font-semibold text-[var(--gc-text)]">
                 Regras e ajustes
@@ -1149,7 +1432,7 @@ export default function App(): JSX.Element {
             </div>
             <Button
               onClick={() => void analyzeAndGenerateResume()}
-              disabled={loading || !snapshot}
+              disabled={isStreaming || !snapshot}
               className="w-full"
             >
               {isStreaming ? (
@@ -1159,6 +1442,45 @@ export default function App(): JSX.Element {
                 </span>
               ) : "Gerar Curriculo ATS"}
             </Button>
+
+            {(editedMarkdown || streamingMarkdown) && !isStreaming ? (
+              <Button
+                onClick={() => void generateCoverLetter()}
+                disabled={isStreaming || isGeneratingCoverLetter || !snapshot}
+                variant="secondary"
+                className="w-full"
+              >
+                {isGeneratingCoverLetter ? (
+                  <span className="flex items-center gap-2">
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    Gerando carta de apresentacao...
+                  </span>
+                ) : "Gerar Carta de Apresentacao"}
+              </Button>
+            ) : null}
+
+            {coverLetterMarkdown && !isGeneratingCoverLetter ? (
+              <div className="rounded-md border border-[var(--gc-border)] bg-[var(--gc-surface)] p-3 space-y-2">
+                <p className="text-xs font-semibold text-[var(--gc-text)]">Refazer carta de apresentacao</p>
+                <Textarea
+                  value={coverRegenerateNotes}
+                  onChange={(e) => setCoverRegenerateNotes(e.target.value)}
+                  placeholder="Ex: enfatize entusiasmo pela cultura GX2 e minha paixao por fintech..."
+                  className="min-h-[70px] text-xs"
+                  disabled={loading || isGeneratingCoverLetter}
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => void regenerateCoverLetter()}
+                  disabled={loading || isGeneratingCoverLetter}
+                >
+                  <RefreshCw size={12} className="mr-1.5" />
+                  Refazer carta com observacao
+                </Button>
+              </div>
+            ) : null}
 
             {/* ATS analysis — updates live during streaming, final pass when complete */}
             {ats ? (
@@ -1182,6 +1504,59 @@ export default function App(): JSX.Element {
                     Score: {ats.score}/100
                   </span>
                 </div>
+                {ats.keywordScore != null || ats.qualityScore != null ? (
+                  <div className="flex flex-wrap gap-2 text-xs text-[var(--gc-text-muted)]">
+                    {ats.keywordScore != null ? (
+                      <span className="rounded-md bg-[var(--gc-canvas-subtle)] px-2 py-1">
+                        Keywords: {ats.keywordScore}%
+                      </span>
+                    ) : null}
+                    {ats.qualityScore != null ? (
+                      <span className="rounded-md bg-[var(--gc-canvas-subtle)] px-2 py-1">
+                        Qualidade: {ats.qualityScore}%
+                      </span>
+                    ) : null}
+                    {ats.qualityReport ? (
+                      <span className="rounded-md bg-[var(--gc-canvas-subtle)] px-2 py-1">
+                        Metricas: {ats.qualityReport.bulletsWithMetrics}/{ats.qualityReport.totalBullets} bullets ({ats.qualityReport.metricPct}%)
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {ats.qualityReport?.dimensions?.length ? (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-[var(--gc-text-muted)]">Qualidade profissional</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {ats.qualityReport.dimensions.map(dim => (
+                        <div
+                          key={dim.id}
+                          className="rounded-md border border-[var(--gc-border)] bg-[var(--gc-canvas-subtle)] px-3 py-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-[var(--gc-text)]">{dim.label}</span>
+                            <span className={[
+                              "text-xs font-bold",
+                              dim.status === "ok"
+                                ? "text-[var(--gc-badge-success-text)]"
+                                : dim.status === "warning"
+                                  ? "text-[var(--gc-badge-warning-text)]"
+                                  : "text-[var(--gc-badge-danger-text)]"
+                            ].join(" ")}>
+                              {dim.score}%
+                            </span>
+                          </div>
+                          {dim.issues.length > 0 ? (
+                            <ul className="mt-1 space-y-0.5 text-[11px] text-[var(--gc-text-muted)]">
+                              {dim.issues.slice(0, 2).map(issue => (
+                                <li key={issue}>• {issue}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 {ats.matchedKeywords.length > 0 ? (
                   <div>
                     <p className="mb-1 text-xs text-[var(--gc-text-muted)]">Keywords atendidas</p>
@@ -1194,10 +1569,47 @@ export default function App(): JSX.Element {
                 ) : null}
                 {ats.missingKeywords.length > 0 ? (
                   <div>
-                    <p className="mb-1 text-xs text-[var(--gc-text-muted)]">Lacunas identificadas</p>
+                    <p className="mb-1 text-xs text-[var(--gc-text-muted)]">
+                      {ats.gapsInResume.length > 0
+                        ? "Faltam no curriculo (voce tem nos projetos)"
+                        : "Lacunas identificadas"}
+                    </p>
                     <div className="flex flex-wrap gap-1">
-                      {ats.missingKeywords.slice(0, 10).map((kw) => (
-                        <span key={kw} className="rounded-full bg-[var(--gc-badge-danger-bg)] px-2 py-0.5 text-xs text-[var(--gc-badge-danger-text)]">{kw}</span>
+                      {(ats.gapsInResume.length > 0 ? ats.gapsInResume : ats.missingKeywords).slice(0, 10).map((kw) => (
+                        <span
+                          key={kw}
+                          className={`rounded-full px-2 py-0.5 text-xs ${
+                            ats.gapsInResume.includes(kw)
+                              ? "bg-[var(--gc-badge-warning-bg)] text-[var(--gc-badge-warning-text)]"
+                              : "bg-[var(--gc-badge-danger-bg)] text-[var(--gc-badge-danger-text)]"
+                          }`}
+                        >
+                          {kw}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {ats.unavailableKeywords.length > 0 ? (
+                  <div>
+                    <p className="mb-1 text-xs text-[var(--gc-text-muted)]">Sem evidencia no perfil (nao inventar)</p>
+                    <div className="flex flex-wrap gap-1">
+                      {ats.unavailableKeywords.slice(0, 8).map((kw) => (
+                        <span key={kw} className="rounded-full bg-[var(--gc-canvas-subtle)] px-2 py-0.5 text-xs text-[var(--gc-text-muted)]">
+                          {kw}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {ats.evidencedKeywords.length > 0 ? (
+                  <div>
+                    <p className="mb-1 text-xs text-[var(--gc-text-muted)]">Com evidencia nos projetos</p>
+                    <div className="flex flex-wrap gap-1">
+                      {ats.evidencedKeywords.slice(0, 12).map((kw) => (
+                        <span key={kw} className="rounded-full bg-[var(--gc-badge-success-bg)] px-2 py-0.5 text-xs text-[var(--gc-badge-success-text)]">
+                          {kw}
+                        </span>
                       ))}
                     </div>
                   </div>
@@ -1223,7 +1635,20 @@ export default function App(): JSX.Element {
                   </div>
                 ) : null}
                 {!isStreaming && ats.score < 100 ? (
-                  <div className="border-t border-[var(--gc-border)] pt-3">
+                  <div className="border-t border-[var(--gc-border)] pt-3 space-y-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-[var(--gc-text)]">
+                        Observacao para refazer curriculo
+                        <span className="ml-1 font-normal text-[var(--gc-text-muted)]">opcional</span>
+                      </label>
+                      <Textarea
+                        value={regenerateNotes}
+                        onChange={(e) => setRegenerateNotes(e.target.value)}
+                        placeholder="Ex: inclua shadcn e figma nos bullets da Room Company; nao mencione projetos privados..."
+                        className="min-h-[70px] text-xs"
+                        disabled={loading}
+                      />
+                    </div>
                     <button
                       onClick={regenerateWithAts}
                       disabled={loading}
@@ -1232,10 +1657,10 @@ export default function App(): JSX.Element {
                       <RefreshCw size={12} />
                       Refazer curriculo corrigindo lacunas ATS
                     </button>
-                    <p className="mt-1 text-[10px] text-[var(--gc-text-subtle)]">
+                    <p className="text-[10px] text-[var(--gc-text-subtle)]">
                       {ats.missingKeywords.length > 0
-                        ? `Gera nova versao priorizando as ${ats.missingKeywords.length} palavras-chave ausentes`
-                        : "Gera nova versao com foco em melhorar cobertura e especificidade tecnica"}
+                        ? `Prioriza ${ats.missingKeywords.length} palavras-chave ausentes + sua observacao acima`
+                        : "Melhora cobertura ATS usando sua observacao acima"}
                     </p>
                   </div>
                 ) : null}
@@ -1243,16 +1668,16 @@ export default function App(): JSX.Element {
             ) : null}
 
             {/* Streaming / final preview panel */}
-            {(streamingMarkdown || editedMarkdown) ? (() => {
-              const displayContent = editedMarkdown || streamingMarkdown;
+            {(streamingMarkdown || editedMarkdown || coverLetterMarkdown) ? (() => {
+              const resumeContent = editedMarkdown || streamingMarkdown;
+              const displayContent = contentTab === "cover-letter" ? coverLetterMarkdown : resumeContent;
               const estimatedPages = Math.max(1, Math.ceil(
                 displayContent.split("\n").filter(l => l.trim()).length / 52
               ));
               return (
                 <div className="rounded-md border border-[var(--gc-border)] bg-[var(--gc-surface)]">
-                  {/* Toolbar */}
                   <div className="flex items-center gap-2 border-b border-[var(--gc-border)] px-3 py-2">
-                    {isStreaming ? (
+                    {isStreaming || isGeneratingCoverLetter ? (
                       <span className="flex items-center gap-1.5 text-xs text-[var(--gc-accent)]">
                         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--gc-accent)]" />
                         Gerando...
@@ -1261,25 +1686,42 @@ export default function App(): JSX.Element {
                       <>
                         <div className="flex overflow-hidden rounded border border-[var(--gc-border)] text-xs">
                           <button
-                            onClick={() => setPreviewMode("raw")}
-                            className={["flex items-center gap-1 px-2.5 py-1 transition-colors", previewMode === "raw" ? "bg-[var(--gc-btn-default-hover)] font-semibold text-[var(--gc-text)]" : "text-[var(--gc-text-muted)] hover:text-[var(--gc-text)]"].join(" ")}
+                            onClick={() => setContentTab("resume")}
+                            className={["px-2.5 py-1 transition-colors", contentTab === "resume" ? "bg-[var(--gc-btn-default-hover)] font-semibold text-[var(--gc-text)]" : "text-[var(--gc-text-muted)] hover:text-[var(--gc-text)]"].join(" ")}
                           >
-                            <FileText size={11} /> Markdown
+                            Curriculo
                           </button>
                           <button
-                            onClick={() => setPreviewMode("preview")}
-                            className={["flex items-center gap-1 border-l border-[var(--gc-border)] px-2.5 py-1 transition-colors", previewMode === "preview" ? "bg-[var(--gc-btn-default-hover)] font-semibold text-[var(--gc-text)]" : "text-[var(--gc-text-muted)] hover:text-[var(--gc-text)]"].join(" ")}
+                            onClick={() => setContentTab("cover-letter")}
+                            disabled={!coverLetterMarkdown}
+                            className={["border-l border-[var(--gc-border)] px-2.5 py-1 transition-colors disabled:opacity-40", contentTab === "cover-letter" ? "bg-[var(--gc-btn-default-hover)] font-semibold text-[var(--gc-text)]" : "text-[var(--gc-text-muted)] hover:text-[var(--gc-text)]"].join(" ")}
                           >
-                            <Eye size={11} /> Preview
+                            Carta
                           </button>
                         </div>
+                        {contentTab === "resume" ? (
+                          <div className="flex overflow-hidden rounded border border-[var(--gc-border)] text-xs">
+                            <button
+                              onClick={() => setPreviewMode("raw")}
+                              className={["flex items-center gap-1 px-2.5 py-1 transition-colors", previewMode === "raw" ? "bg-[var(--gc-btn-default-hover)] font-semibold text-[var(--gc-text)]" : "text-[var(--gc-text-muted)] hover:text-[var(--gc-text)]"].join(" ")}
+                            >
+                              <FileText size={11} /> Markdown
+                            </button>
+                            <button
+                              onClick={() => setPreviewMode("preview")}
+                              className={["flex items-center gap-1 border-l border-[var(--gc-border)] px-2.5 py-1 transition-colors", previewMode === "preview" ? "bg-[var(--gc-btn-default-hover)] font-semibold text-[var(--gc-text)]" : "text-[var(--gc-text-muted)] hover:text-[var(--gc-text)]"].join(" ")}
+                            >
+                              <Eye size={11} /> Preview
+                            </button>
+                          </div>
+                        ) : null}
                         <span className="text-[11px] text-[var(--gc-text-subtle)]">
                           ~{estimatedPages} {estimatedPages === 1 ? "pagina" : "paginas"}
                         </span>
                         <div className="ml-auto flex items-center gap-3">
-                          {editedMarkdown !== streamingMarkdown ? (
+                          {contentTab === "resume" && editedMarkdown !== streamingMarkdown ? (
                             <button
-                              onClick={reanalyzeAts}
+                              onClick={() => void reanalyzeAts()}
                               className="flex items-center gap-1 text-xs text-[var(--gc-attention)] hover:underline"
                               title="Re-analisar keywords ATS com o texto editado"
                             >
@@ -1294,24 +1736,50 @@ export default function App(): JSX.Element {
                             {copiedMd ? <Check size={12} /> : <Clipboard size={12} />}
                             {copiedMd ? "Copiado!" : "Copiar MD"}
                           </button>
-                          <button
-                            onClick={() => void exportPdf()}
-                            disabled={!resume}
-                            className="flex items-center gap-1 text-xs text-[var(--gc-accent)] hover:underline disabled:opacity-40"
-                          >
-                            Baixar PDF
-                          </button>
+                          {contentTab === "resume" ? (
+                            <button
+                              onClick={() => void exportPdf()}
+                              disabled={!resume}
+                              className="flex items-center gap-1 text-xs text-[var(--gc-accent)] hover:underline disabled:opacity-40"
+                            >
+                              Baixar PDF
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => void exportCoverLetterPdf()}
+                              disabled={!coverLetterMarkdown.trim()}
+                              className="flex items-center gap-1 text-xs text-[var(--gc-accent)] hover:underline disabled:opacity-40"
+                            >
+                              Baixar PDF
+                            </button>
+                          )}
                         </div>
                       </>
                     )}
                   </div>
-                  {/* Content */}
                   <div className="max-h-[680px] overflow-y-auto">
                     {isStreaming ? (
                       <pre className="whitespace-pre-wrap px-4 py-4 font-mono text-xs leading-relaxed text-[var(--gc-text)]">
                         {streamingMarkdown}
                         <span className="animate-pulse">▋</span>
                       </pre>
+                    ) : isGeneratingCoverLetter ? (
+                      <pre className="whitespace-pre-wrap px-4 py-4 font-mono text-xs leading-relaxed text-[var(--gc-text)]">
+                        {coverLetterMarkdown}
+                        <span className="animate-pulse">▋</span>
+                      </pre>
+                    ) : contentTab === "cover-letter" ? (
+                      previewMode === "preview" ? (
+                        <MarkdownPreview content={coverLetterMarkdown} />
+                      ) : (
+                        <textarea
+                          value={coverLetterMarkdown}
+                          onChange={(e) => setCoverLetterMarkdown(e.target.value)}
+                          spellCheck={false}
+                          className="w-full resize-none bg-transparent px-4 py-4 font-mono text-xs leading-relaxed text-[var(--gc-text)] outline-none"
+                          style={{ minHeight: "420px" }}
+                        />
+                      )
                     ) : previewMode === "preview" ? (
                       <MarkdownPreview content={editedMarkdown} />
                     ) : (
@@ -1379,36 +1847,88 @@ export default function App(): JSX.Element {
 
             {/* Repo cards */}
             {topRepos.length > 0 ? (
-              <div>
-                <h2 className="mb-3 text-sm font-semibold text-[var(--gc-text)]">Repositorios populares</h2>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {topRepos.map((repo) => (
-                    <div key={repo.id} className="flex flex-col gap-2 rounded-md border border-[var(--gc-border)] bg-[var(--gc-surface)] p-4">
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="text-sm font-semibold text-[var(--gc-accent)] break-all">{repo.name}</span>
-                        <span className="shrink-0 rounded-full border border-[var(--gc-border)] px-2 py-0.5 text-[10px] text-[var(--gc-text-muted)]">
-                          {repo.private ? "Private" : "Public"}
-                        </span>
-                      </div>
-                      {repo.description ? (
-                        <p className="text-xs text-[var(--gc-text-muted)] line-clamp-2">{repo.description}</p>
-                      ) : null}
-                      <div className="mt-auto flex items-center gap-3 text-xs text-[var(--gc-text-muted)]">
-                        {repo.language ? (
-                          <span className="flex items-center gap-1">
-                            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: LANG_COLORS[repo.language] ?? "#8b949e" }} />
-                            {repo.language}
-                          </span>
-                        ) : null}
-                        {repo.stargazersCount > 0 ? (
-                          <span className="flex items-center gap-1"><Star size={11} />{repo.stargazersCount}</span>
-                        ) : null}
-                        {repo.forksCount > 0 ? (
-                          <span className="flex items-center gap-1"><GitBranch size={11} />{repo.forksCount}</span>
-                        ) : null}
-                      </div>
+              <div className="space-y-4">
+                {selectedRepoProfile ? (
+                  <RepoDetailPanel
+                    profile={selectedRepoProfile}
+                    onClose={() => void setSelectedRepo(null)}
+                  />
+                ) : null}
+
+                <div>
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold text-[var(--gc-text)]">
+                      Repositorios ({topRepos.length})
+                    </h2>
+                    <div className="text-right text-xs text-[var(--gc-text-muted)]">
+                      <p>Clique para ver commits, PRs e stack</p>
+                      <p>
+                        {resumeRepoNames.length > 0
+                          ? `${resumeRepoNames.length} marcado(s) para o curriculo`
+                          : "Marque os projetos que entram na secao Projetos"}
+                      </p>
                     </div>
-                  ))}
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {topRepos.map((repo) => {
+                      const repoCommits = snapshot?.commits.filter(c => c.repoName === repo.name).length ?? 0;
+                      const repoPrs = snapshot?.pullRequests.filter(pr => pr.repoName === repo.name).length ?? 0;
+                      const isSelected = selectedRepo === repo.name;
+                      const inResume = resumeRepoNames.includes(repo.name);
+                      return (
+                        <div
+                          key={repo.id}
+                          className={[
+                            "flex flex-col gap-2 rounded-md border p-4 transition-colors",
+                            isSelected
+                              ? "border-[var(--gc-accent)] bg-[var(--gc-canvas-subtle)]"
+                              : "border-[var(--gc-border)] bg-[var(--gc-surface)] hover:border-[var(--gc-accent)]"
+                          ].join(" ")}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => void setSelectedRepo(isSelected ? null : repo.name)}
+                            className="flex flex-col gap-2 text-left"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="text-sm font-semibold text-[var(--gc-accent)] break-all">{repo.name}</span>
+                              <span className="shrink-0 rounded-full border border-[var(--gc-border)] px-2 py-0.5 text-[10px] text-[var(--gc-text-muted)]">
+                                {repo.private ? "Private" : "Public"}
+                              </span>
+                            </div>
+                            {repo.description ? (
+                              <p className="text-xs text-[var(--gc-text-muted)] line-clamp-2">{repo.description}</p>
+                            ) : null}
+                            <div className="mt-auto flex flex-wrap items-center gap-3 text-xs text-[var(--gc-text-muted)]">
+                              {repo.language ? (
+                                <span className="flex items-center gap-1">
+                                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: LANG_COLORS[repo.language] ?? "#8b949e" }} />
+                                  {repo.language}
+                                </span>
+                              ) : null}
+                              <span className="flex items-center gap-1"><GitBranch size={11} />{repoCommits}</span>
+                              <span className="flex items-center gap-1"><GitPullRequest size={11} />{repoPrs}</span>
+                              {repo.stargazersCount > 0 ? (
+                                <span className="flex items-center gap-1"><Star size={11} />{repo.stargazersCount}</span>
+                              ) : null}
+                            </div>
+                          </button>
+                          <label
+                            className="flex cursor-pointer items-center gap-2 border-t border-[var(--gc-border)] pt-2 text-xs text-[var(--gc-text)]"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={inResume}
+                              onChange={(e) => toggleResumeRepo(repo.name, e.target.checked)}
+                              className="rounded border-[var(--gc-border)]"
+                            />
+                            <span>Incluir no curriculo (secao Projetos)</span>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             ) : (

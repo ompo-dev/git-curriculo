@@ -8,6 +8,8 @@ import {
   type ProfileMetrics
 } from "../schemas";
 import { extractKeywords, normalizeKeyword, unique } from "../utils/text";
+import { keywordInCorpus } from "../utils/keywordSynonyms";
+import { buildProfileEvidenceCorpus } from "./atsEvidenceService";
 
 interface MetricsInput {
   profileSnapshot: GitHubProfileSnapshot;
@@ -17,6 +19,7 @@ interface MetricsInput {
 interface AtsInput {
   jobSpec: JobSpec;
   profileMetrics: ProfileMetrics;
+  profileSnapshot?: GitHubProfileSnapshot;
 }
 
 export class MetricsService {
@@ -106,21 +109,23 @@ export class MetricsService {
       ...extractKeywords(jobSpec.responsibilities.join(" "))
     ]).map(normalizeKeyword);
 
-    const profileSignals = unique([
-      ...input.profileMetrics.skillsEvidence,
-      ...input.profileMetrics.topLanguages.map((item) => item.language),
-      ...input.profileMetrics.highlights,
-      ...extractKeywords(input.profileMetrics.highlights.join(" "))
-    ]).map(normalizeKeyword);
+    const profileCorpus = input.profileSnapshot
+      ? buildProfileEvidenceCorpus(input.profileSnapshot)
+      : normalizeKeyword(
+          [
+            ...input.profileMetrics.skillsEvidence,
+            ...input.profileMetrics.topLanguages.map(item => item.language),
+            ...input.profileMetrics.highlights.join(" ")
+          ].join(" ")
+        );
 
-    const signalSet = new Set(profileSignals);
-    const matchedKeywords = unique(keywords.filter((keyword) => signalSet.has(keyword)));
-    const missingKeywords = unique(keywords.filter((keyword) => !signalSet.has(keyword)));
+    const matchedKeywords = unique(keywords.filter((keyword) => keywordInCorpus(keyword, profileCorpus)));
+    const missingKeywords = unique(keywords.filter((keyword) => !keywordInCorpus(keyword, profileCorpus)));
 
     const weightRequired = Math.max(jobSpec.requiredSkills.length, 1);
     const requiredMatched = jobSpec.requiredSkills
       .map(normalizeKeyword)
-      .filter((item) => signalSet.has(item)).length;
+      .filter((item) => keywordInCorpus(item, profileCorpus)).length;
 
     const optionalMatched = matchedKeywords.length - requiredMatched;
 
@@ -152,7 +157,10 @@ export class MetricsService {
       matchedKeywords,
       missingKeywords,
       suggestions,
-      evidence
+      evidence,
+      evidencedKeywords: matchedKeywords,
+      gapsInResume: [],
+      unavailableKeywords: missingKeywords
     });
   }
 }

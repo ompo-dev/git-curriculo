@@ -33,7 +33,10 @@ describe("ResumeService", () => {
       repoName: "repo-1",
       message: "perf: reduziu requisicoes da API em 47%",
       committedAt: "2026-05-02T10:00:00.000Z",
-      url: "https://github.com/octocat/repo-1/commit/a3"
+      url: "https://github.com/octocat/repo-1/commit/a3",
+      filesChanged: [],
+      technologies: ["api"],
+      impactSignals: ["reduziu requisicoes da API em 47%"]
     });
 
     const resume = await service.generateResume({

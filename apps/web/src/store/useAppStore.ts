@@ -7,6 +7,7 @@ import type {
   ResumeDocument,
   SyncStatus
 } from "@gitcurriculo/core";
+import { emptySyncProgress } from "@gitcurriculo/core";
 
 interface AppState {
   snapshot: GitHubProfileSnapshot | null;
@@ -32,7 +33,8 @@ const initialSyncStatus: SyncStatus = {
   syncedCommits: 0,
   syncedPullRequests: 0,
   syncedIssues: 0,
-  errorMessage: null
+  errorMessage: null,
+  progress: emptySyncProgress()
 };
 
 export const useAppStore = create<AppState>((set) => ({
