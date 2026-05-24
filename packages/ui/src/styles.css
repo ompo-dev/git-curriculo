@@ -1,0 +1,116 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Dark mode (default) ── */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --gc-bg:            #0d1117;
+  --gc-canvas-subtle: #161b22;
+  --gc-surface:       #161b22;
+  --gc-border:        #30363d;
+  --gc-border-muted:  #21262d;
+
+  --gc-text:          #e6edf3;
+  --gc-text-muted:    #8b949e;
+  --gc-text-subtle:   #6e7781;
+
+  --gc-accent:        #58a6ff;
+  --gc-success:       #3fb950;
+  --gc-danger:        #f85149;
+  --gc-attention:     #d29922;
+
+  --gc-header:        #161b22;
+
+  /* Buttons */
+  --gc-btn-primary-bg:      #238636;
+  --gc-btn-primary-hover:   #2ea043;
+  --gc-btn-primary-text:    #ffffff;
+  --gc-btn-primary-border:  rgba(240,246,252,0.1);
+  --gc-btn-default-bg:      #21262d;
+  --gc-btn-default-hover:   #30363d;
+  --gc-btn-default-border:  #30363d;
+  --gc-btn-default-text:    #c9d1d9;
+
+  /* Inputs */
+  --gc-input-bg:      #0d1117;
+
+  /* Semantic badges */
+  --gc-badge-success-bg:    #1b3a2a;
+  --gc-badge-success-text:  #3fb950;
+  --gc-badge-warning-bg:    #342714;
+  --gc-badge-warning-text:  #d29922;
+  --gc-badge-danger-bg:     #3a1c1c;
+  --gc-badge-danger-text:   #f85149;
+
+  --gc-shadow: 0 1px 0 rgba(1,4,9,0.1);
+}
+
+/* ── Light mode ── */
+[data-theme="light"] {
+  color-scheme: light;
+
+  --gc-bg:            #f6f8fa;
+  --gc-canvas-subtle: #f6f8fa;
+  --gc-surface:       #ffffff;
+  --gc-border:        #d0d7de;
+  --gc-border-muted:  #eaeef2;
+
+  --gc-text:          #24292f;
+  --gc-text-muted:    #57606a;
+  --gc-text-subtle:   #6e7781;
+
+  --gc-accent:        #0969da;
+  --gc-success:       #1a7f37;
+  --gc-danger:        #cf222e;
+  --gc-attention:     #9a6700;
+
+  --gc-header:        #24292f;
+
+  --gc-btn-primary-bg:      #2da44e;
+  --gc-btn-primary-hover:   #2c974b;
+  --gc-btn-primary-text:    #ffffff;
+  --gc-btn-primary-border:  rgba(27,31,36,0.15);
+  --gc-btn-default-bg:      #f6f8fa;
+  --gc-btn-default-hover:   #f3f4f6;
+  --gc-btn-default-border:  #d0d7de;
+  --gc-btn-default-text:    #24292f;
+
+  --gc-input-bg:      #ffffff;
+
+  --gc-badge-success-bg:    #dafbe1;
+  --gc-badge-success-text:  #1a7f37;
+  --gc-badge-warning-bg:    #fff8c5;
+  --gc-badge-warning-text:  #9a6700;
+  --gc-badge-danger-bg:     #ffebe9;
+  --gc-badge-danger-text:   #cf222e;
+
+  --gc-shadow: 0 1px 0 rgba(27,31,36,0.04);
+}
+
+/* ── Base ── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+body {
+  background-color: var(--gc-bg);
+  color: var(--gc-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji";
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+:root { scrollbar-color: var(--gc-border) transparent; scrollbar-width: thin; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--gc-border); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }

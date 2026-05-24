@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"C:\\\\Projects\\\\Teste\\\\git-curriculo\")",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(node *)",
+      "Bash(Get-ChildItem \"apps/extension/dist\" -Recurse)",
+      "Bash(Select-Object Name, Length)",
+      "PowerShell(Get-ChildItem \"C:\\\\Projects\\\\Teste\\\\git-curriculo\\\\apps\\\\extension\\\\dist\" -Recurse | ForEach-Object { \"$\\($_.Name\\) - $\\($_.Length\\) bytes\" })",
+      "PowerShell(npm run *)"
+    ]
+  }
+}
