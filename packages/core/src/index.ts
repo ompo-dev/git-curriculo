@@ -53,6 +53,7 @@ export {
   buildJobKeywordPool,
   isMeaningfulAtsKeyword,
   filterMeaningfulAtsKeywords,
+  shouldOmitSkillsSection,
   sanitizeJobTitle,
   stripEmojis,
   buildPdfDocumentTitle,

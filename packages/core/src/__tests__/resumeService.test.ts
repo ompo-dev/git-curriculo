@@ -51,5 +51,20 @@ describe("ResumeService", () => {
     expect(jobSpec.title.toLowerCase()).toContain("react");
     expect(jobSpec.company?.toLowerCase()).toContain("act");
   });
-});
 
+  it("nao usa 'Sobre a Empresa' como nome da empresa", () => {
+    const service = new ResumeService();
+    const jobSpec = service.parseJobText(
+      [
+        "Desenvolvedor Front-End",
+        "Sobre a Empresa",
+        "Zanc Acessoria Nacional de Cobranca",
+        "Responsabilidades:",
+        "- Construir interfaces com React"
+      ].join("\n")
+    );
+
+    expect(jobSpec.company?.toLowerCase()).not.toContain("sobre a empresa");
+    expect(jobSpec.company?.toLowerCase()).toContain("zanc");
+  });
+});

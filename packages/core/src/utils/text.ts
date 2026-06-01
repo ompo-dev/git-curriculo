@@ -17,6 +17,22 @@ export const stripAccents = (value: string): string =>
 
 export const unique = (items: string[]): string[] => Array.from(new Set(items));
 
+/** Detecta instrucoes para remover/nao exibir secao Skills/Habilidades. */
+export const shouldOmitSkillsSection = (rulesText?: string): boolean => {
+  const norm = normalizeKeyword(rulesText ?? "");
+  if (!norm) return false;
+
+  const directPatterns = [
+    /nao.{0,20}(coloque|inclua|mostre|exiba|adicione|gere|traga).{0,20}(skills|habilidades|secao skills|secao de skills|secao habilidades)/,
+    /sem.{0,20}(skills|habilidades|secao skills|secao de skills|secao habilidades)/,
+    /(remov|retir|omit|exclu).{0,24}(skills|habilidades|secao skills|secao habilidades)/,
+    /(skills|habilidades|secao skills|secao habilidades).{0,24}(nao|sem|remov|retir|omit|exclu)/,
+    /nao.{0,16}(quero|desejo).{0,20}(skills|habilidades)/
+  ];
+
+  return directPatterns.some(pattern => pattern.test(norm));
+};
+
 const TECH_PATTERN =
   /\b(?:react|reactjs|react.?query|tanstack|vite|typescript|javascript|js|ts|node|nodejs|python|java|go|rust|c#|dotnet|php|ruby|swift|kotlin|dart|flutter|sql|sqlite|postgres|postgresql|mongodb|mysql|mariadb|redis|elasticsearch|docker|kubernetes|k8s|aws|azure|gcp|graphql|grpc|rest|restful|api|axios|zod|zustand|tailwind|tailwindcss|shadcn|shadcnui|shadcn.?ui|tachyons|bootstrap|material.?ui|chakra|radix|radix.?ui|ci.?cd|github.?actions|gitlab.?ci|jenkins|travis|testing|vitest|jest|playwright|cypress|next\.?js|nextjs|nuqs|html|html5|css|css3|scss|sass|git|github|gitlab|bitbucket|vue|vuejs|angular|svelte|webpack|babel|rollup|parcel|figma|storybook|laravel|rails|django|flask|fastapi|spring|vtex|shopify|magento|woocommerce|e.?commerce|linux|bash|shell|firebase|supabase|vercel|netlify|cloudflare|seo|acessibilidade|accessibility|wcag|performance|pwa|ssr|ssg|spa|design.?system|microfrontend|micro.?frontend|monorepo|turborepo|nx|lerna|websocket|webhook|agile|scrum|kanban|jira|confluence|okr|kpi|analytics|datadog|sentry|observabilidade|clean.?code|solid|tdd|bdd|ddd|passkeys|2fa|otp|i18n|intl|chart\.js|tradingview|logrocket|hook.?form|react.?hook.?form|server.?components|rsc|indexeddb|offline.?first|cache|caching|metadata|json.?ld|sitemap|csp|csrf|xss|ethers|viem|web3|fintech|trading|exchange|lightweight.?charts|class.?variance|cva|core.?web.?vitals|lcp|cls|inp)\b/g;
 
@@ -48,6 +64,8 @@ function isValidCompanyName(value: string): boolean {
   if (company.length < 2 || company.length > 40) return false;
   if (INVALID_COMPANY.test(company)) return false;
   if (/^(de|da|do|em|na|no|nos|nas|zona|area)\b/i.test(company)) return false;
+  if (/^sobre (a empresa|a vaga)\b/i.test(company)) return false;
+  if (/^(about the role|about the company|about us)\b/i.test(company)) return false;
   if (/excelencia|excelência|zona de|conhecer melhor|experiencia/i.test(company)) return false;
   // LinkedIn frequentemente vem tudo minúsculo (ex.: "act digital")
   if (!/[A-Za-zÀ-Ü0-9]/.test(company)) return false;
@@ -411,3 +429,5 @@ export function isJsonParseError(error: unknown): boolean {
     error.message.includes("corrompida")
   );
 }
+
+

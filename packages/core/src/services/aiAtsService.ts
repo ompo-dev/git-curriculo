@@ -210,6 +210,35 @@ function buildProjectContextBlock(
     .join("\n\n---\n\n");
 }
 
+function extractBenefitsFromJobText(jobFullText: string): string[] {
+  const lines = jobFullText
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+  const start = lines.findIndex(line => /(benef[ií]cios|o que oferecemos|benefits|perks)/i.test(line));
+  if (start < 0) return [];
+
+  const collected: string[] = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (!line) continue;
+    if (/(responsabilidades?|requisitos?|qualifica[cç][oõ]es|skills?|sobre a empresa|about)/i.test(line)) {
+      break;
+    }
+    const parsed = line
+      .split(/;+/)
+      .map(item => item.replace(/^[-*•]\s*/, "").trim())
+      .filter(item => item.length > 2);
+    for (const item of parsed) {
+      if (collected.length >= 8) break;
+      collected.push(item);
+    }
+    if (collected.length >= 8) break;
+  }
+  return collected;
+}
+
 function buildAiAtsContext(input: AiAtsProfileInput): string {
   const profilePrompt = input.profilePrompt?.trim() ?? "";
   const allStack = collectSnapshotTechnologies(input.profileSnapshot);
@@ -219,6 +248,7 @@ function buildAiAtsContext(input: AiAtsProfileInput): string {
   const resumeProjectsBlock = resumeRepos?.length
     ? buildProjectContextBlock(input.profileSnapshot, resumeRepos)
     : "";
+  const benefits = extractBenefitsFromJobText(input.jobFullText);
 
   return [
     "=== VAGA ===",
@@ -234,6 +264,7 @@ function buildAiAtsContext(input: AiAtsProfileInput): string {
     input.jobSpec.preferredSkills.length > 0
       ? `Desejaveis: ${input.jobSpec.preferredSkills.join(", ")}`
       : "",
+    benefits.length > 0 ? `Beneficios: ${benefits.join(" | ")}` : "",
     "",
     "=== TEXTO COMPLETO DA VAGA ===",
     input.jobFullText.slice(0, 6000),

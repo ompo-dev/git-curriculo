@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { ensureSkillsSectionKeywords, finalizeAtsAnalysis } from "../services/resumeAtsEnforcement";
-import { buildJobKeywordPool, filterMeaningfulAtsKeywords, isMeaningfulAtsKeyword } from "../utils/text";
+import { buildJobKeywordPool, filterMeaningfulAtsKeywords, isMeaningfulAtsKeyword, shouldOmitSkillsSection } from "../utils/text";
 import { ResumeService } from "../services/resumeService";
 
 const gx2Job = `Front End Developer (React/Next) | Mid-Level
@@ -120,5 +120,11 @@ Resumo curto.
     expect(result).toContain("- Next.js");
     expect(result).toContain("- React Hook Form");
     expect(result.indexOf("## Skills")).toBeGreaterThan(result.indexOf("## Contato"));
+  });
+
+  it("detects explicit no-skills rule from candidate instructions", () => {
+    expect(shouldOmitSkillsSection("nao coloque skills como aqui")).toBe(true);
+    expect(shouldOmitSkillsSection("Sem seção de habilidades.")).toBe(true);
+    expect(shouldOmitSkillsSection("Foque no resumo e projetos")).toBe(false);
   });
 });

@@ -27,6 +27,7 @@ import {
   extractKeywords,
   normalizeKeyword,
   sanitizeJobTitle,
+  shouldOmitSkillsSection,
   stripAccents,
   stripEmojis,
   unique
@@ -335,8 +336,9 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       "PROIBIDO linha de tags/stack apos titulo de projeto ou empresa (ex: '**React**, **TypeScript**, **Next.js**, **API REST**...'). Apos ### projeto va DIRETO para bullets (-).",
       "PROIBIDO paragrafo no Resumo com enumeracao de tecnologias separadas por virgula — integre no maximo 4-5 techs em frases naturais.",
       ...((): string[] => {
-        const cr = allRulesText(input.customRules, input.atsBlueprintRules).toLowerCase();
-        const omitSkills = /n[aã]o.{0,30}(skills?|habilidades)|sem.{0,20}(skills?|habilidades)|(remov|omit|exclu|tir).{0,30}(skills?|habilidades)|(skills?|habilidades).{0,30}(n[aã]o|sem|remov|exclu)/.test(cr);
+        const omitSkills = shouldOmitSkillsSection(
+          allRulesText(input.customRules, input.atsBlueprintRules)
+        );
         return omitSkills
           ? [
               "4. ATS: Keywords do CHECKLIST DEVEM aparecer literalmente nos bullets de Experiencia ou Projetos (secao Skills removida). Cada termo do checklist = pelo menos 1 mencao explicita."
@@ -355,8 +357,9 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       "12. PROIBIDO usar backticks (`) em qualquer parte do curriculo.",
       "",
       ...((): string[] => {
-        const cr = allRulesText(input.customRules, input.atsBlueprintRules).toLowerCase();
-        const omitSkills = /n[aã]o.{0,30}(skills?|habilidades)|sem.{0,20}(skills?|habilidades)|(remov|omit|exclu|tir).{0,30}(skills?|habilidades)|(skills?|habilidades).{0,30}(n[aã]o|sem|remov|exclu)/.test(cr);
+        const omitSkills = shouldOmitSkillsSection(
+          allRulesText(input.customRules, input.atsBlueprintRules)
+        );
         const sections = ["## Resumo", "## Contato", omitSkills ? null : "## Skills", "## Experiencia", "## Projetos", "## Educacao"].filter(Boolean) as string[];
         const projectOnly =
           input.resumeRepoNames && input.resumeRepoNames.length > 0
@@ -1007,7 +1010,10 @@ export class ResumeService {
       markdown = sanitizeResumeMarkdown(markdown, {
         allowedProjectRepos: resumeRepoNames,
         profilePrompt: streamInput.profilePrompt,
-        jobSpec: streamInput.jobSpec
+        jobSpec: streamInput.jobSpec,
+        omitSkillsSection: shouldOmitSkillsSection(
+          allRulesText(streamInput.customRules, streamInput.atsBlueprintRules)
+        )
       });
       onChunk(markdown);
 
@@ -1464,3 +1470,4 @@ export const ResumeGenerationSchema = z.object({
   profilePrompt: z.string().optional(),
   locale: z.string().default("pt-BR")
 });
+

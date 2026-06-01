@@ -1,6 +1,6 @@
 import type { AtsAnalysis, JobSpec, ProjectEvidence } from "../schemas";
 import { keywordInCorpus } from "../utils/keywordSynonyms";
-import { filterMeaningfulAtsKeywords, normalizeKeyword, unique } from "../utils/text";
+import { filterMeaningfulAtsKeywords, normalizeKeyword, shouldOmitSkillsSection, unique } from "../utils/text";
 import { sanitizeVanityMetricsInMarkdown } from "../utils/resumeMetrics";
 import { analyzeResumeQuality } from "./resumeQualityService";
 
@@ -473,14 +473,27 @@ export function ensureJobPersonalization(markdown: string, jobSpec?: JobSpec): s
 
 export function sanitizeResumeMarkdown(
   markdown: string,
-  options?: { allowedProjectRepos?: string[]; profilePrompt?: string; jobSpec?: JobSpec }
+  options?: {
+    allowedProjectRepos?: string[];
+    profilePrompt?: string;
+    jobSpec?: JobSpec;
+    omitSkillsSection?: boolean;
+    rulesText?: string;
+  }
 ): string {
-  let result = ensureResumeSummarySection(markdown, options?.profilePrompt);
+  let result = stripDuplicatedResumeDocument(markdown);
+  result = ensureResumeSummarySection(result, options?.profilePrompt);
   if (options?.jobSpec) {
     result = ensureJobPersonalization(result, options.jobSpec);
   }
   result = sanitizeVanityMetricsInMarkdown(result);
   result = stripKeywordDumpLines(result);
+  const omitSkills =
+    options?.omitSkillsSection === true ||
+    shouldOmitSkillsSection(options?.rulesText);
+  if (omitSkills) {
+    result = removeSkillsSection(result);
+  }
   if (options?.allowedProjectRepos?.length) {
     result = enforceResumeProjectSelection(result, options.allowedProjectRepos);
   }
@@ -560,4 +573,44 @@ export function ensureSkillsSectionKeywords(markdown: string, keywords: string[]
   }
 
   return `${markdown.trimEnd()}\n\n${block}`.trimEnd() + "\n";
+}
+
+/** Remove secao Skills/Habilidades/Tecnologias quando o candidato exigir. */
+export function removeSkillsSection(markdown: string): string {
+  return markdown
+    .replace(/\n##\s+(?:Skills|Habilidades|Tecnologias)[^\n]*(?:\n[\s\S]*?)?(?=\n##\s|\n#\s|$)/im, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd()
+    .concat("\n");
+}
+
+/**
+ * Alguns outputs da IA duplicam o curriculo inteiro no mesmo markdown.
+ * Mantemos apenas o primeiro bloco quando o segundo repete o mesmo heading principal.
+ */
+export function stripDuplicatedResumeDocument(markdown: string): string {
+  const lines = markdown.split("\n");
+  const firstHeadingIdx = lines.findIndex(line => /^#\s+\S/.test(line.trim()));
+  if (firstHeadingIdx < 0) return markdown;
+  const heading = lines[firstHeadingIdx]?.trim();
+  if (!heading) return markdown;
+
+  for (let i = firstHeadingIdx + 1; i < lines.length; i += 1) {
+    if (lines[i]?.trim() !== heading) continue;
+    const firstBlock = lines.slice(firstHeadingIdx, i).join("\n").trim();
+    const secondBlock = lines.slice(i).join("\n").trim();
+    if (!firstBlock || !secondBlock) continue;
+
+    const firstProbe = firstBlock.slice(0, Math.min(280, firstBlock.length));
+    const secondProbe = secondBlock.slice(0, Math.min(280, secondBlock.length));
+    if (
+      firstBlock === secondBlock ||
+      firstBlock.includes(secondProbe) ||
+      secondBlock.includes(firstProbe)
+    ) {
+      return lines.slice(0, i).join("\n").trimEnd() + "\n";
+    }
+  }
+
+  return markdown;
 }

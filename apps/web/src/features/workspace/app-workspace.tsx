@@ -24,6 +24,7 @@ import {
   ensureSkillsSectionKeywords,
   keywordInCorpus,
   normalizeKeyword,
+  shouldOmitSkillsSection,
   analyzeResumeQuality,
   buildPdfDocumentTitle,
   unique,
@@ -62,6 +63,74 @@ const LOCAL_RESUME_REPOS_KEY = "git-curriculo:resume-repos";
 
 const LOCAL_REGENERATE_NOTES_KEY = "git-curriculo:web:regenerate-notes";
 const LOCAL_COVER_REGENERATE_NOTES_KEY = "git-curriculo:web:cover-regenerate-notes";
+
+interface AtsJobDetails {
+  company?: string;
+  title: string;
+  responsibilities: string[];
+  benefits: string[];
+  requiredSkills: string[];
+  preferredSkills: string[];
+}
+
+function extractJobSectionLines(
+  rawJobText: string,
+  startPattern: RegExp,
+  endPattern: RegExp,
+  limit = 8
+): string[] {
+  const lines = rawJobText
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+  const startIdx = lines.findIndex(line => startPattern.test(line));
+  if (startIdx < 0) return [];
+
+  const collected: string[] = [];
+  for (let i = startIdx + 1; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (!line) continue;
+    if (endPattern.test(line)) break;
+    if (/^[A-Z][\w\s/-]{0,45}:$/.test(line)) break;
+    const parsed = line
+      .split(/;+/)
+      .map(item => item.replace(/^[-*•]\s*/, "").trim())
+      .filter(item => item.length > 2);
+    for (const item of parsed) {
+      if (collected.length >= limit) break;
+      collected.push(item);
+    }
+    if (collected.length >= limit) break;
+  }
+  return collected;
+}
+
+function buildAtsJobDetails(rawJobText: string): AtsJobDetails | null {
+  const trimmed = rawJobText.trim();
+  if (!trimmed) return null;
+  try {
+    const service = new ResumeService();
+    const parsed = service.parseJobText(trimmed);
+    const benefits = extractJobSectionLines(
+      trimmed,
+      /(benef[ií]cios|o que oferecemos|benefits|perks)/i,
+      /(responsabilidades?|requisitos?|skills?|qualifica[cç][oõ]es|sobre a empresa|about)/i,
+      8
+    );
+
+    return {
+      company: parsed.company,
+      title: parsed.title,
+      responsibilities: parsed.responsibilities.slice(0, 8),
+      benefits,
+      requiredSkills: parsed.requiredSkills.slice(0, 12),
+      preferredSkills: parsed.preferredSkills.slice(0, 10)
+    };
+  } catch {
+    return null;
+  }
+}
 
 function loadResumeRepoNames(): string[] {
   const parsed = readJsonLocalStorage<unknown>(LOCAL_RESUME_REPOS_KEY, []);
@@ -152,6 +221,7 @@ export function AppWorkspace(): JSX.Element {
     setContentTab,
     setResumeRepoNames
   } = useResumeStore();
+  const atsJobDetails = useMemo(() => buildAtsJobDetails(jobText), [jobText]);
 
   const authPopupRef = useRef<Window | null>(null);
   const popupWatcherRef = useRef<number | null>(null);
@@ -622,7 +692,7 @@ export function AppWorkspace(): JSX.Element {
         ])
       );
       const candidateRules = customRules.trim();
-      const omitSkillsRule = /tir.{0,20}(skills?|habilidades)|sem.{0,20}(skills?|habilidades)/i.test(candidateRules);
+      const omitSkillsRule = shouldOmitSkillsSection(candidateRules);
       const blueprintRules = blueprintToGenerationRules(profileAnalysis.blueprint, {
         jobSpec,
         resumeRepoNames: resumeReposForGeneration,
@@ -712,7 +782,9 @@ export function AppWorkspace(): JSX.Element {
         atsSearchText = sanitizeResumeMarkdown(atsSearchText, {
           allowedProjectRepos: resumeReposForGeneration,
           profilePrompt,
-          jobSpec
+          jobSpec,
+          omitSkillsSection: omitSkillsRule,
+          rulesText: [candidateRules, blueprintRules || ""].filter(Boolean).join("\n")
         });
         generatedResume.rawMarkdown = atsSearchText;
         setEditedMarkdown(atsSearchText);
@@ -763,7 +835,9 @@ export function AppWorkspace(): JSX.Element {
         atsSearchText = sanitizeResumeMarkdown(atsSearchText, {
           allowedProjectRepos: resumeReposForGeneration,
           profilePrompt,
-          jobSpec
+          jobSpec,
+          omitSkillsSection: omitSkillsRule,
+          rulesText: [candidateRules, blueprintRules || ""].filter(Boolean).join("\n")
         });
         generatedResume.rawMarkdown = atsSearchText;
         setEditedMarkdown(atsSearchText);
@@ -859,7 +933,9 @@ export function AppWorkspace(): JSX.Element {
         atsSearchText = sanitizeResumeMarkdown(atsSearchText, {
           allowedProjectRepos: resumeReposForGeneration,
           profilePrompt,
-          jobSpec
+          jobSpec,
+          omitSkillsSection: omitSkillsRule,
+          rulesText: [candidateRules, blueprintRules || ""].filter(Boolean).join("\n")
         });
         generatedResume.rawMarkdown = atsSearchText;
         setEditedMarkdown(atsSearchText);
@@ -1630,6 +1706,65 @@ export function AppWorkspace(): JSX.Element {
                     Score: {ats.score}/100
                   </span>
                 </div>
+                {atsJobDetails ? (
+                  <div className="rounded-md border border-[var(--gc-border)] bg-[var(--gc-canvas-subtle)] p-3">
+                    <p className="text-xs font-semibold text-[var(--gc-text)]">Detalhes da vaga (base do ATS)</p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2 text-xs text-[var(--gc-text-muted)]">
+                      <div>
+                        <span className="font-medium text-[var(--gc-text)]">Empresa:</span>{" "}
+                        {atsJobDetails.company ?? "Nao identificada"}
+                      </div>
+                      <div>
+                        <span className="font-medium text-[var(--gc-text)]">Cargo:</span>{" "}
+                        {atsJobDetails.title || "Nao identificado"}
+                      </div>
+                    </div>
+                    {atsJobDetails.requiredSkills.length > 0 ? (
+                      <div className="mt-2">
+                        <p className="mb-1 text-xs text-[var(--gc-text-muted)]">Skills obrigatorias</p>
+                        <div className="flex flex-wrap gap-1">
+                          {atsJobDetails.requiredSkills.map(skill => (
+                            <span key={`req-${skill}`} className="rounded-full bg-[var(--gc-badge-warning-bg)] px-2 py-0.5 text-xs text-[var(--gc-badge-warning-text)]">
+                              {skill}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {atsJobDetails.preferredSkills.length > 0 ? (
+                      <div className="mt-2">
+                        <p className="mb-1 text-xs text-[var(--gc-text-muted)]">Skills desejadas</p>
+                        <div className="flex flex-wrap gap-1">
+                          {atsJobDetails.preferredSkills.map(skill => (
+                            <span key={`pref-${skill}`} className="rounded-full bg-[var(--gc-canvas)] px-2 py-0.5 text-xs text-[var(--gc-text-muted)]">
+                              {skill}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {atsJobDetails.responsibilities.length > 0 ? (
+                      <div className="mt-2">
+                        <p className="mb-1 text-xs text-[var(--gc-text-muted)]">Atribuicoes principais</p>
+                        <div className="space-y-0.5 text-[11px] text-[var(--gc-text-muted)]">
+                          {atsJobDetails.responsibilities.slice(0, 5).map(item => (
+                            <p key={item}>• {item}</p>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {atsJobDetails.benefits.length > 0 ? (
+                      <div className="mt-2">
+                        <p className="mb-1 text-xs text-[var(--gc-text-muted)]">Beneficios identificados</p>
+                        <div className="space-y-0.5 text-[11px] text-[var(--gc-text-muted)]">
+                          {atsJobDetails.benefits.slice(0, 5).map(item => (
+                            <p key={item}>• {item}</p>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {ats.keywordScore != null || ats.qualityScore != null ? (
                   <div className="flex flex-wrap gap-2 text-xs text-[var(--gc-text-muted)]">
                     {ats.keywordScore != null ? (
