@@ -167,6 +167,8 @@ export interface AiAtsProfileInput {
   profilePrompt?: string;
   resumeRepoNames?: string[];
   existingBlueprint?: AtsBlueprint;
+  /** Instrucoes do campo "Regras e ajustes" — incorporadas no blueprint. */
+  customRules?: string;
 }
 
 export interface AiAtsResumeInput extends AiAtsProfileInput {
@@ -248,7 +250,15 @@ function buildAiAtsContext(input: AiAtsProfileInput): string {
     allProjectsBlock.slice(0, 10000),
     resumeProjectsBlock
       ? `\n=== PROJETOS SELECIONADOS PARA SECAO PROJETOS DO CURRICULO ===\n${resumeProjectsBlock.slice(0, 8000)}`
-      : "\n=== PROJETOS NO CURRICULO ===\nUsar dossies acima (nenhum repo filtrado)."
+      : "\n=== PROJETOS NO CURRICULO ===\nUsar dossies acima (nenhum repo filtrado).",
+    input.customRules?.trim()
+      ? [
+          "",
+          "=== REGRAS E AJUSTES DO CANDIDATO (prioridade maxima no blueprint) ===",
+          input.customRules.trim(),
+          "Inclua estas instrucoes em generationRules e restrictions quando aplicavel."
+        ].join("\n")
+      : ""
   ]
     .filter(Boolean)
     .join("\n");
@@ -402,7 +412,8 @@ export class AiAtsAnalyzer {
       "7. restrictions: o que NAO fazer (inventar metricas, keyword dump, etc.)",
       "8. metricRules: regras de metricas verificaveis dos dossies",
       "9. NUNCA inclua palavras genericas de anuncio (pessoas, conhecimento, implementar, solucoes)",
-      "10. Responda APENAS JSON valido"
+      "10. Se houver REGRAS E AJUSTES DO CANDIDATO no contexto, replique-as em generationRules e restrictions",
+      "11. Responda APENAS JSON valido"
     ].join("\n");
 
     const user = [

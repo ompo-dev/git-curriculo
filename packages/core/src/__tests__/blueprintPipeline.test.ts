@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 
 import {
   atsAnalysisFromBlueprint,
   blueprintToGenerationRules,
+  composeResumeGenerationRules,
   updateBlueprintFromEvaluation
 } from "../services/atsBlueprintService";
 import type { AtsBlueprint } from "../schemas";
@@ -25,6 +26,27 @@ const sampleBlueprint: AtsBlueprint = {
 };
 
 describe("ATS blueprint pipeline", () => {
+  it("composes candidate rules before blueprint rules", () => {
+    const rules = blueprintToGenerationRules(sampleBlueprint, {
+      jobSpec: {
+        title: sampleBlueprint.targetTitle,
+        company: "GX2",
+        summary: "",
+        responsibilities: [],
+        requiredSkills: [],
+        preferredSkills: [],
+        keywords: []
+      },
+      resumeRepoNames: ["gymrats"]
+    });
+
+    const composed = composeResumeGenerationRules(rules, "Nao mencione Tegma", "Extra pass");
+
+    expect(composed.indexOf("Nao mencione Tegma")).toBeLessThan(composed.indexOf("ATS BLUEPRINT"));
+    expect(composed).toContain("PRIORIDADE ABSOLUTA");
+    expect(composed).toContain("Extra pass");
+  });
+
   it("converts blueprint to generation rules with checklist", () => {
     const rules = blueprintToGenerationRules(sampleBlueprint, {
       jobSpec: {

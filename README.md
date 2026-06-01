@@ -1,41 +1,81 @@
-# Git Curriculo MVP
+# Git Curriculo
 
-Monorepo local com web app + extensao Chromium para analise de GitHub e geracao de curriculo ATS.
+Monorepo para analise de perfil GitHub e geracao de curriculo ATS personalizado por vaga.
 
 ## Stack
-- React + Vite
-- Axios + Zod + Zustand + nuqs
-- Tailwind + componentes em Atomic Design
-- SQLite local (`sql.js`) + LocalStorage + Cookies
-- Extensao Chromium (opcional para fluxo rapido em sites)
+
+- **Web:** Next.js 15 (App Router) + React + Zustand + Tailwind
+- **API:** Bun + Elysia (OAuth GitHub, sync, ATS, curriculo, PDF)
+- **Desktop:** Tauri 2 (webview Next.js)
+- **Pacotes:** `@gitcurriculo/core` (dominio) + `@gitcurriculo/ui` (Atomic Design)
 
 ## Rodar localmente
-1. `npm install`
-2. Configure credenciais OAuth do GitHub para o web app:
-   - copie `apps/web/.env.example` para `apps/web/.env`
-   - preencha `GITHUB_CLIENT_ID` e `GITHUB_CLIENT_SECRET`
-   - (alternativa) defina no terminal:
-     - `$env:GITHUB_CLIENT_ID="seu_client_id"`
-     - `$env:GITHUB_CLIENT_SECRET="seu_client_secret"`
-3. Suba o web app: `npm run dev:web`
-4. (Opcional) Suba a extensao: `npm run dev:extension`
-5. O web app usa porta fixa `5173` (`strictPort=true`). Se a porta estiver ocupada, libere-a antes de subir.
 
-## Login com GitHub no app web (standalone)
-- Clique em `Entrar com GitHub` no web app.
-- O app abre popup OAuth na mesma origem do Vite (porta padrao `5173`).
-- Apos concluir, o token volta para o app e o sync pode iniciar.
+1. Instale dependencias:
 
-## Geracao de curriculo ATS (dados reais)
-- O campo `Contexto sobre voce` e salvo localmente e entra no prompt final.
-- O motor usa snapshot GitHub + evidencias por projeto (commits, PRs, issues, linguagens e sinais quantificados em texto).
-- Sem `DeepSeek API Key`, a geracao real e bloqueada com erro explicito (nao cai em mock silencioso).
+```bash
+bun install
+```
 
-## Extensao (opcional)
-- A extensao serve como complemento para fluxo rapido em sites como LinkedIn:
-  colar vaga, gerar curriculo e devolver rapidamente.
-- Ela nao e dependencia para o login do app web.
+2. Configure OAuth GitHub na API (`apps/api/.env`):
 
-## Observacoes de seguranca
-- Token GitHub e chave DeepSeek podem ser criptografados localmente com passphrase (AES-GCM + PBKDF2).
-- Revogue e regenere qualquer chave exposta em conversa ou log.
+```bash
+cp apps/api/.env.example apps/api/.env
+```
+
+Preencha `GITHUB_CLIENT_ID` e `GITHUB_CLIENT_SECRET` do [GitHub Developer Settings](https://github.com/settings/developers).
+
+No OAuth App, defina **Authorization callback URL** exatamente como:
+
+```
+http://localhost:3000/api/oauth/github/callback
+```
+
+(Reinicie `bun run dev:api` apos editar o `.env`.)
+
+3. Suba API e web (terminais separados):
+
+```bash
+bun run dev:api
+bun run dev:web
+```
+
+4. Acesse http://localhost:3000
+
+## Desktop (Tauri)
+
+```bash
+bun run dev:desktop
+```
+
+Build estatico do Next para Tauri:
+
+```bash
+$env:TAURI_BUILD="1"; bun run --filter @gitcurriculo/web build
+bun run --filter @gitcurriculo/desktop build
+```
+
+## Fluxo principal
+
+1. Login GitHub via popup (`/api/oauth/github/start`)
+2. Sync GitHub (local SQLite no browser ou JSON no Tauri)
+3. Cole a vaga e gere blueprint ATS + curriculo (DeepSeek obrigatorio)
+4. Exporte Markdown ou PDF
+
+## Estrutura
+
+```
+apps/
+  api/       # Elysia
+  web/       # Next.js
+  desktop/   # Tauri
+packages/
+  core/
+  ui/
+```
+
+## Testes
+
+```bash
+bun run test
+```

@@ -6,6 +6,7 @@ export * from "./atoms/textarea";
 export * from "./atoms/badge";
 export * from "./atoms/card";
 export * from "./molecules/metric-card";
+export * from "./molecules/streaming-indicator";
 export * from "./organisms/stats-grid";
 export * from "./organisms/app-shell";
 export * from "./templates/dashboard-template";

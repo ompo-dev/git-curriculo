@@ -1,21 +1,19 @@
+"use client";
+
 import { AppShell, type AppShellUser } from "../organisms/app-shell";
 import { DashboardTemplate } from "../templates/dashboard-template";
 
 export function GitHubLikeDashboardPage({
   user,
-  extensionUrl,
-  extensionDownloadUrl,
   sidebar,
   main
 }: {
   user?: AppShellUser;
-  extensionUrl?: string;
-  extensionDownloadUrl?: string;
   sidebar: React.ReactNode;
   main: React.ReactNode;
 }): JSX.Element {
   return (
-    <AppShell user={user} extensionUrl={extensionUrl} extensionDownloadUrl={extensionDownloadUrl}>
+    <AppShell user={user}>
       <DashboardTemplate sidebar={sidebar} main={main} />
     </AppShell>
   );

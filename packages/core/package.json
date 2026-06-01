@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "bun test src"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.1.6",
@@ -26,8 +26,9 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/bun": "latest",
+    "@types/js-cookie": "^3.0.6",
     "@types/node": "^22.10.2",
-    "@types/sql.js": "^1.4.9",
-    "vitest": "^2.1.8"
+    "@types/sql.js": "^1.4.9"
   }
 }

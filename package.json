@@ -1,22 +1,22 @@
 {
   "name": "git-curriculo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
-    "dev:auth": "npm run dev -w @gitcurriculo/auth-proxy",
-    "dev:web": "npm run dev -w @gitcurriculo/web",
-    "dev:extension": "npm run dev -w @gitcurriculo/extension",
-    "build": "npm run build --workspaces --if-present",
-    "bundle-extension": "node scripts/bundle-extension.mjs",
-    "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present"
+    "dev:api": "bun --env-file=.env run --cwd apps/api dev",
+    "dev:web": "bun --env-file=.env run --cwd apps/web dev",
+    "dev:desktop": "bun run --filter @gitcurriculo/desktop dev",
+    "dev": "bunx concurrently -n api,web -c blue,green \"bun run dev:api\" \"bun run dev:web\"",
+    "build": "bun run --filter '*' build",
+    "test": "bun run --filter '*' test",
+    "typecheck": "bun run --filter '*' typecheck"
   },
   "devDependencies": {
+    "concurrently": "^9.1.2",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.14",
     "@types/react-dom": "^18.3.5",

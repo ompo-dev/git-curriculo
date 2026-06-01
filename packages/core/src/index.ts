@@ -16,6 +16,8 @@ export {
   atsAnalysisFromBlueprint,
   blueprintToGenerationRules,
   blueprintToPromptBlock,
+  composeResumeGenerationRules,
+  formatCandidateRulesBlock,
   updateBlueprintFromEvaluation,
   type BlueprintGenerationOptions
 } from "./services/atsBlueprintService";
@@ -38,8 +40,11 @@ export {
   extractBulletsFromMarkdown
 } from "./services/resumeQualityService";
 export * from "./storage/secureStorage";
+export * from "./storage/storageAdapter";
 export * from "./storage/sqliteStorage";
 export * from "./storage/localStateStorage";
+export * from "./services/coverLetterService";
+export * from "./utils/export";
 export {
   extractKeywords,
   normalizeKeyword,

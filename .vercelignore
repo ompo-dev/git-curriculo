@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+
+node_modules
+**/node_modules
+
+apps/web/.next
+apps/api/.vercel
+apps/web/.vercel

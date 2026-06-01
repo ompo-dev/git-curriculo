@@ -35,12 +35,38 @@ import { filterMeaningfulImpactSignals } from "../utils/resumeMetrics";
 
 export { buildJobKeywordPool, extractBroadKeywords, extractCompanyFromJob, extractJobTitleFromText, sanitizeJobTitle, stripEmojis };
 
+function allRulesText(customRules?: string, atsBlueprintRules?: string): string {
+  return [customRules?.trim(), atsBlueprintRules?.trim()].filter(Boolean).join("\n");
+}
+
+function buildGenerationRulesPromptSections(input: {
+  customRules?: string;
+  atsBlueprintRules?: string;
+}): { candidateBlock: string; blueprintBlock: string } {
+  const candidate = input.customRules?.trim();
+  const blueprint = input.atsBlueprintRules?.trim();
+  const candidateBlock = candidate
+    ? [
+        "## INSTRUCOES PERSONALIZADAS DO CANDIDATO (PRIORIDADE MAXIMA — aplique antes de tudo)",
+        "Estas instrucoes sobrepoe blueprint ATS e qualquer padrao. Siga-as rigorosamente:",
+        candidate
+      ].join("\n")
+    : "";
+  const blueprintBlock = blueprint
+    ? ["## PLANO ATS (blueprint — siga o checklist)", blueprint].join("\n")
+    : "";
+  return { candidateBlock, blueprintBlock };
+}
+
 interface GenerateResumeInput {
   jobSpec: JobSpec;
   profileSnapshot: GitHubProfileSnapshot;
   locale?: "pt-BR" | string;
   profilePrompt?: string;
+  /** Campo "Regras e ajustes" — apenas instrucoes do candidato. */
   customRules?: string;
+  /** Plano ATS derivado do blueprint (sem regras do candidato). */
+  atsBlueprintRules?: string;
   resumeRepoNames?: string[];
 }
 
@@ -50,6 +76,7 @@ interface WeaveMissingAtsInput {
   profileSnapshot: GitHubProfileSnapshot;
   profilePrompt?: string;
   customRules?: string;
+  atsBlueprintRules?: string;
   resumeRepoNames?: string[];
   locale?: string;
   evidenceHints?: string[];
@@ -61,6 +88,7 @@ interface PolishResumeQualityInput {
   jobSpec: JobSpec;
   profilePrompt?: string;
   customRules?: string;
+  atsBlueprintRules?: string;
   resumeRepoNames?: string[];
   locale?: string;
   qualityReport: PolishQualityInput["qualityReport"];
@@ -75,6 +103,7 @@ interface ProviderStreamInput {
   profilePrompt: string;
   locale: string;
   customRules?: string;
+  atsBlueprintRules?: string;
 }
 
 export interface PdfMetadata {
@@ -93,6 +122,7 @@ export interface WeaveAtsKeywordsInput {
   profilePrompt: string;
   locale: string;
   customRules?: string;
+  atsBlueprintRules?: string;
   evidenceHints?: string[];
   allowedProjectRepos?: string[];
 }
@@ -104,6 +134,7 @@ export interface PolishQualityInput {
   locale: string;
   jobSpec: JobSpec;
   customRules?: string;
+  atsBlueprintRules?: string;
   qualityReport: {
     weakBullets: string[];
     metricPct: number;
@@ -144,6 +175,7 @@ export interface CoverLetterStreamInput {
   resumeMarkdown?: string;
   locale: string;
   customRules?: string;
+  atsBlueprintRules?: string;
 }
 
 export class DeepSeekResumeProvider implements ResumeProvider {
@@ -250,17 +282,14 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       .filter(s => !s.endsWith(": "))
       .join("\n");
 
-    const rulesBlock = input.customRules?.trim()
-      ? [
-          "## INSTRUCOES PERSONALIZADAS DO CANDIDATO (PRIORIDADE MAXIMA — aplique antes de tudo)",
-          "Estas instrucoes sobrepoe qualquer padrao. Siga-as rigorosamente:",
-          input.customRules.trim()
-        ].join("\n")
-      : "";
+    const { candidateBlock, blueprintBlock } = buildGenerationRulesPromptSections(input);
 
     const userContent = [
       `Idioma de saida: ${input.locale}`,
       "",
+      candidateBlock,
+      blueprintBlock,
+      candidateBlock || blueprintBlock ? "" : undefined,
       "## Perfil GitHub do candidato",
       userBlock,
       "",
@@ -270,8 +299,6 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       "",
       "## Vaga alvo",
       jobBlock,
-      "",
-      rulesBlock,
       "",
       "## Projetos GitHub — analises reais de problemas, solucoes e melhorias",
       input.resumeRepoNames && input.resumeRepoNames.length > 0
@@ -293,6 +320,12 @@ export class DeepSeekResumeProvider implements ResumeProvider {
     const systemContent = [
       `Voce e um especialista senior em curriculos ATS para desenvolvedores de software. Idioma: ${input.locale}.`,
       "",
+      ...(input.customRules?.trim()
+        ? [
+            "0. REGRAS DO CANDIDATO: As instrucoes personalizadas no inicio da mensagem do usuario tem PRIORIDADE ABSOLUTA sobre todas as regras abaixo e sobre o plano ATS.",
+            ""
+          ]
+        : []),
       "REGRAS OBRIGATORIAS:",
       "1. EXPERIENCIA PROFISSIONAL: O campo 'Historico profissional e contexto do candidato' e a fonte da verdade para empregos reais. Inclua TODAS as empresas listadas, com cargo, periodo e bullets de responsabilidade/impacto. Nao omita nenhuma.",
       "1b. RESUMO OBRIGATORIO: Secao ## Resumo SEMPRE presente (3-4 frases sobre voce, posicionamento para a vaga, tom profissional). Use o contexto pessoal do candidato. NUNCA pule ## Resumo.",
@@ -302,7 +335,7 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       "PROIBIDO linha de tags/stack apos titulo de projeto ou empresa (ex: '**React**, **TypeScript**, **Next.js**, **API REST**...'). Apos ### projeto va DIRETO para bullets (-).",
       "PROIBIDO paragrafo no Resumo com enumeracao de tecnologias separadas por virgula — integre no maximo 4-5 techs em frases naturais.",
       ...((): string[] => {
-        const cr = (input.customRules ?? "").toLowerCase();
+        const cr = allRulesText(input.customRules, input.atsBlueprintRules).toLowerCase();
         const omitSkills = /n[aã]o.{0,30}(skills?|habilidades)|sem.{0,20}(skills?|habilidades)|(remov|omit|exclu|tir).{0,30}(skills?|habilidades)|(skills?|habilidades).{0,30}(n[aã]o|sem|remov|exclu)/.test(cr);
         return omitSkills
           ? [
@@ -322,7 +355,7 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       "12. PROIBIDO usar backticks (`) em qualquer parte do curriculo.",
       "",
       ...((): string[] => {
-        const cr = (input.customRules ?? "").toLowerCase();
+        const cr = allRulesText(input.customRules, input.atsBlueprintRules).toLowerCase();
         const omitSkills = /n[aã]o.{0,30}(skills?|habilidades)|sem.{0,20}(skills?|habilidades)|(remov|omit|exclu|tir).{0,30}(skills?|habilidades)|(skills?|habilidades).{0,30}(n[aã]o|sem|remov|exclu)/.test(cr);
         const sections = ["## Resumo", "## Contato", omitSkills ? null : "## Skills", "## Experiencia", "## Projetos", "## Educacao"].filter(Boolean) as string[];
         const projectOnly =
@@ -429,9 +462,7 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       })
       .join("\n\n");
 
-    const rulesBlock = input.customRules?.trim()
-      ? `\n## REGRAS DO CANDIDATO\n${input.customRules.trim()}`
-      : "";
+    const { candidateBlock, blueprintBlock } = buildGenerationRulesPromptSections(input);
 
     const systemContent = [
       `Voce edita curriculos ATS em ${input.locale}. Tarefa: integrar keywords faltantes em bullets EXISTENTES.`,
@@ -455,6 +486,9 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       .join("\n");
 
     const userContent = [
+      candidateBlock,
+      blueprintBlock,
+      candidateBlock || blueprintBlock ? "" : undefined,
       "## Keywords faltantes (integrar naturalmente nos bullets existentes)",
       input.missingKeywords.join(", "),
       input.evidenceHints && input.evidenceHints.length > 0
@@ -466,7 +500,6 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       input.profilePrompt.trim()
         ? `\n## Contexto profissional\n${input.profilePrompt.slice(0, 3000)}`
         : "",
-      rulesBlock,
       "",
       "## Curriculo atual — EDITE ESTE",
       input.resumeMarkdown.slice(0, 14000)
@@ -583,7 +616,12 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       "9. Retorne o curriculo Markdown COMPLETO editado."
     ].join("\n");
 
+    const { candidateBlock, blueprintBlock } = buildGenerationRulesPromptSections(input);
+
     const userContent = [
+      candidateBlock,
+      blueprintBlock,
+      candidateBlock || blueprintBlock ? "" : undefined,
       `Metricas atuais: ${input.qualityReport.metricPct}% bullets com numeros — meta: 70%+.`,
       "",
       "## Bullets fracos (reescrever com impacto quantificado)",
@@ -605,7 +643,6 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       input.profilePrompt.trim()
         ? `\n## Contexto profissional\n${input.profilePrompt.slice(0, 3000)}`
         : "",
-      input.customRules?.trim() ? `\n## Regras do candidato\n${input.customRules.trim()}` : "",
       "",
       "## Curriculo atual — EDITE ESTE",
       input.resumeMarkdown.slice(0, 14000)
@@ -718,9 +755,7 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       })
       .join("\n\n");
 
-    const rulesBlock = input.customRules?.trim()
-      ? `\n## INSTRUCOES DO CANDIDATO\n${input.customRules.trim()}`
-      : "";
+    const { candidateBlock, blueprintBlock } = buildGenerationRulesPromptSections(input);
 
     const systemContent = [
       `Voce escreve cartas de apresentacao profissionais e autenticas em ${input.locale}.`,
@@ -736,6 +771,9 @@ export class DeepSeekResumeProvider implements ResumeProvider {
     ].join("\n");
 
     const userContent = [
+      candidateBlock,
+      blueprintBlock,
+      candidateBlock || blueprintBlock ? "" : undefined,
       `Empresa: ${company}`,
       `Vaga: ${input.jobSpec.title}`,
       `Resumo da vaga: ${input.jobSpec.summary.slice(0, 500)}`,
@@ -748,8 +786,7 @@ export class DeepSeekResumeProvider implements ResumeProvider {
       evidenceBlock ? `Projetos relevantes:\n${evidenceBlock}` : "",
       input.resumeMarkdown?.trim()
         ? `Curriculo gerado (referencia, nao copie):\n${input.resumeMarkdown.slice(0, 2500)}`
-        : "",
-      rulesBlock
+        : ""
     ]
       .filter(Boolean)
       .join("\n");
@@ -951,7 +988,8 @@ export class ResumeService {
       resumeRepoNames,
       profilePrompt: input.profilePrompt?.trim() ?? "",
       locale,
-      customRules: input.customRules?.trim()
+      customRules: input.customRules?.trim(),
+      atsBlueprintRules: input.atsBlueprintRules?.trim()
     };
 
     try {
@@ -1012,6 +1050,7 @@ export class ResumeService {
         profilePrompt: input.profilePrompt?.trim() ?? "",
         locale,
         customRules: input.customRules?.trim(),
+        atsBlueprintRules: input.atsBlueprintRules?.trim(),
         evidenceHints: input.evidenceHints,
         allowedProjectRepos: resumeRepoNames
       },
@@ -1045,7 +1084,8 @@ export class ResumeService {
         profilePrompt: input.profilePrompt?.trim() ?? "",
         resumeMarkdown: input.resumeMarkdown,
         locale,
-        customRules: input.customRules?.trim()
+        customRules: input.customRules?.trim(),
+        atsBlueprintRules: input.atsBlueprintRules?.trim()
       },
       onChunk
     );
@@ -1073,6 +1113,7 @@ export class ResumeService {
         locale,
         jobSpec: input.jobSpec,
         customRules: input.customRules?.trim(),
+        atsBlueprintRules: input.atsBlueprintRules?.trim(),
         qualityReport: input.qualityReport,
         allowedProjectRepos: resumeRepoNames
       },

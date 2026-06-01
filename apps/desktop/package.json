@@ -1,0 +1,13 @@
+{
+  "name": "@gitcurriculo/desktop",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "typecheck": "echo 'desktop typecheck via tauri'"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0"
+  }
+}

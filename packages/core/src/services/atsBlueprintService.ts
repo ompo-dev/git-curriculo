@@ -5,7 +5,6 @@ export interface BlueprintGenerationOptions {
   jobSpec: JobSpec;
   resumeRepoNames?: string[];
   omitSkillsRule?: boolean;
-  customRules?: string;
   extraRules?: string;
 }
 
@@ -14,7 +13,7 @@ export function blueprintToGenerationRules(
   blueprint: AtsBlueprint,
   options: BlueprintGenerationOptions
 ): string {
-  const { jobSpec, resumeRepoNames, omitSkillsRule, customRules, extraRules } = options;
+  const { jobSpec, resumeRepoNames, omitSkillsRule, extraRules } = options;
   const projectEvidence = blueprint.keywordEvidence.filter(entry =>
     resumeRepoNames?.length
       ? resumeRepoNames.some(repo => normalizeKeyword(entry.source).includes(normalizeKeyword(repo)))
@@ -74,7 +73,32 @@ export function blueprintToGenerationRules(
       : ""
   ].filter(Boolean);
 
-  return [lines.join("\n"), customRules?.trim(), extraRules?.trim()].filter(Boolean).join("\n\n");
+  return [lines.join("\n"), extraRules?.trim()].filter(Boolean).join("\n\n");
+}
+
+const CANDIDATE_RULES_HEADER =
+  "=== REGRAS E AJUSTES DO CANDIDATO (PRIORIDADE ABSOLUTA — sobrepoe blueprint e padroes do sistema) ===";
+
+/** Bloco formatado das instrucoes do textarea "Regras e ajustes". */
+export function formatCandidateRulesBlock(candidateRules?: string): string {
+  const trimmed = candidateRules?.trim();
+  if (!trimmed) return "";
+  return `${CANDIDATE_RULES_HEADER}\n${trimmed}`;
+}
+
+/** Junta regras do candidato (primeiro) + blueprint ATS + extras para weave/polish. */
+export function composeResumeGenerationRules(
+  blueprintRules: string,
+  candidateRules?: string,
+  extraRules?: string
+): string {
+  return [
+    formatCandidateRulesBlock(candidateRules),
+    blueprintRules.trim(),
+    extraRules?.trim()
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 export function blueprintToPromptBlock(blueprint: AtsBlueprint): string {

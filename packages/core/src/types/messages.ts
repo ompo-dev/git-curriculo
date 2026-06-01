@@ -1,7 +1,4 @@
 export const MESSAGE_CONTRACTS = {
-  AUTH_EXTENSION_PING: "AUTH_EXTENSION_PING",
-  AUTH_EXTENSION_PONG: "AUTH_EXTENSION_PONG",
-  AUTH_EXPORT_TOKEN: "AUTH_EXPORT_TOKEN",
   AUTH_GITHUB_LOGIN_REQUEST: "AUTH_GITHUB_LOGIN_REQUEST",
   AUTH_GITHUB_LOGIN_RESULT: "AUTH_GITHUB_LOGIN_RESULT",
   SYNC_TRIGGER: "SYNC_TRIGGER",
@@ -11,7 +8,7 @@ export const MESSAGE_CONTRACTS = {
 
 export type MessageContract = (typeof MESSAGE_CONTRACTS)[keyof typeof MESSAGE_CONTRACTS];
 
-export interface ExtensionMessage<TPayload = unknown> {
+export interface AppMessage<TPayload = unknown> {
   type: MessageContract;
   payload: TPayload;
 }

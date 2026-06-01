@@ -8,6 +8,7 @@ import {
   type GitHubProfileSnapshot,
   type ResumeDocument
 } from "../schemas";
+import type { StorageAdapter } from "./storageAdapter";
 
 const DB_BINARY_KEY = "git-curriculo:sqlite-binary";
 const IDB_NAME = "git-curriculo";
@@ -80,7 +81,7 @@ export interface BrowserSqliteStorageOptions {
   persistKey?: string;
 }
 
-export class BrowserSqliteStorage {
+export class BrowserSqliteStorage implements StorageAdapter {
   private readonly locateFileBaseUrl: string;
   private readonly locateFileResolver?: (file: string) => string;
   private readonly persistKey: string;

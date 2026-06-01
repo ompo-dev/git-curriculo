@@ -8,3 +8,13 @@ coverage
 .env.*
 !.env.example
 !**/.env.example
+
+.vercel
+
+# Build/cache artifacts
+.bun-cache
+**/.bun-cache
+.next
+**/.next
+*.tsbuildinfo
+**/*.tsbuildinfo

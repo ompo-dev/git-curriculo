@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Git Curriculo",
+  "version": "0.2.0",
+  "identifier": "com.gitcurriculo.app",
+  "build": {
+    "beforeDevCommand": "bun run --filter @gitcurriculo/web dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "bun run --filter @gitcurriculo/web build",
+    "frontendDist": "../web/out"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Git Curriculo",
+        "width": 1280,
+        "height": 800,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"]
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [],
+      "desktop": {
+        "schemes": ["gitcurriculo"]
+      }
+    }
+  }
+}

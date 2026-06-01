@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 
 import { ResumeService } from "../services/resumeService";
 import { buildSnapshotFixture } from "./fixtures";
@@ -24,41 +24,32 @@ describe("ResumeService", () => {
     ).rejects.toThrow(/DeepSeek API Key obrigatoria/i);
   });
 
-  it("gera fallback quando permitido e inclui projectEvidence", async () => {
-    const service = new ResumeService(undefined, { allowMockFallback: true });
-    const snapshot = buildSnapshotFixture();
+  it("parseJobText extrai titulo e keywords da vaga", () => {
+    const service = new ResumeService();
+    const jobSpec = service.parseJobText(
+      "Frontend Engineer\nReact TypeScript\nResponsabilidades: construir UI"
+    );
+    expect(jobSpec.title.length).toBeGreaterThan(0);
+    expect(jobSpec.keywords.length).toBeGreaterThan(0);
+  });
 
-    snapshot.commits.push({
-      sha: "a3",
-      repoName: "repo-1",
-      message: "perf: reduziu requisicoes da API em 47%",
-      committedAt: "2026-05-02T10:00:00.000Z",
-      url: "https://github.com/octocat/repo-1/commit/a3",
-      filesChanged: [],
-      technologies: ["api"],
-      impactSignals: ["reduziu requisicoes da API em 47%"]
-    });
+  it("parseJobText extrai empresa e cargo de vaga do LinkedIn", () => {
+    const service = new ResumeService();
+    const jobSpec = service.parseJobText(
+      [
+        "act digital",
+        "React Developer",
+        "act digital · Lisboa e Região (Híbrido)",
+        "",
+        "About the Role:",
+        "We are looking for a React Developer...",
+        "Responsibilities:",
+        "Collaborate closely with backend, product, and UX/UI teams"
+      ].join("\n")
+    );
 
-    const resume = await service.generateResume({
-      locale: "pt-BR",
-      profilePrompt: "Frontend com foco em performance",
-      jobSpec: {
-        title: "Frontend Engineer",
-        summary: "React e TypeScript",
-        responsibilities: ["Construir interfaces"],
-        requiredSkills: ["react", "typescript"],
-        preferredSkills: ["tailwind"],
-        keywords: ["react", "typescript", "tailwind"]
-      },
-      profileSnapshot: snapshot
-    });
-
-    expect(resume.projectEvidence.length).toBeGreaterThan(0);
-    expect(
-      resume.projectEvidence.some((item) =>
-        item.quantifiedImpactSignals.some((signal) => signal.includes("47%"))
-      )
-    ).toBe(true);
+    expect(jobSpec.title.toLowerCase()).toContain("react");
+    expect(jobSpec.company?.toLowerCase()).toContain("act");
   });
 });
 

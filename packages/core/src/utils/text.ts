@@ -49,7 +49,8 @@ function isValidCompanyName(value: string): boolean {
   if (INVALID_COMPANY.test(company)) return false;
   if (/^(de|da|do|em|na|no|nos|nas|zona|area)\b/i.test(company)) return false;
   if (/excelencia|excelência|zona de|conhecer melhor|experiencia/i.test(company)) return false;
-  if (!/[A-ZÀ-Ü0-9]/.test(company)) return false;
+  // LinkedIn frequentemente vem tudo minúsculo (ex.: "act digital")
+  if (!/[A-Za-zÀ-Ü0-9]/.test(company)) return false;
   return true;
 }
 
@@ -88,7 +89,7 @@ export const extractJobTitleFromText = (rawText: string, lines: string[]): strin
       cleaned.length >= 5 &&
       cleaned.length < 100 &&
       !/^(logo|id da|id:|sobre a|veja como|acesse|conhe|enviar|reative|pessoas|candidatar|compartilhar|salvar|promovid|anunciad|mais de \d|h[íi]brido|remoto|presencial|tempo integral|part.?time|nyse:|whirlpool|samsung|google|amazon|microsoft|meta|uber|ifood|nubank|itau|bradesco|ambev|totvs|softplan|rd station|br\b|zona de|excelencia|excelência)/i.test(cleaned) &&
-      /\b(desenvolv|engineer|engenheiro|analista|analyst|designer|gerente|manager|coordenador|lider|lead|especialista|specialist|arquiteto|architect|junior|pleno|senior|sr\.|jr\.|dev|programador|front.?end|back.?end|full.?stack|mobile|devops|sre|qa|tester|product|dados|data|software|systems)\b/i.test(cleaned)
+      /\b(desenvolv|developer|engineer|engenheiro|analista|analyst|designer|gerente|manager|coordenador|lider|lead|especialista|specialist|arquiteto|architect|junior|pleno|senior|sr\.|jr\.|programador|front.?end|back.?end|full.?stack|mobile|devops|sre|qa|tester|product|dados|data|software|systems)\b/i.test(cleaned)
     );
   };
 
@@ -99,7 +100,10 @@ export const extractJobTitleFromText = (rawText: string, lines: string[]): strin
       return (
         cleaned.length < 90 &&
         cleaned.length > 5 &&
-        !/^(logo|id:|sobre a|veja como|acesse|conhe|enviar|reative|pessoas|candidatar|compartilhar|salvar|promovid|anunciad|mais de \d|zona de|excelencia)/i.test(cleaned)
+        !/^(logo|id:|sobre a|veja como|acesse|conhe|enviar|reative|pessoas|candidatar|compartilhar|salvar|promovid|anunciad|mais de \d|zona de|excelencia)/i.test(cleaned) &&
+        // evita pegar frases de responsabilidade como "título"
+        !/^(collaborate|develop|build|ensure|integrate|participate|support)\b/i.test(cleaned) &&
+        !/\b(?:collaborate|work closely|ensure|integrate|participate)\b/i.test(cleaned)
       );
     }) ??
     "Vaga";
@@ -108,6 +112,18 @@ export const extractJobTitleFromText = (rawText: string, lines: string[]): strin
 };
 
 export const extractCompanyFromJob = (rawText: string, lines: string[]): string | undefined => {
+  const firstLines = lines.slice(0, 30);
+
+  const pickCompanyFromLine = (line: string): string | undefined => {
+    const cleaned = stripEmojis(line).trim();
+    if (!cleaned) return undefined;
+    // "Empresa · Local" ou "Empresa · Lisboa..." (LinkedIn)
+    const dotParts = cleaned.split("·").map(p => p.trim()).filter(Boolean);
+    const candidate = dotParts[0] ?? cleaned;
+    const company = normalizeCompanyName(candidate);
+    return isValidCompanyName(company) ? company : undefined;
+  };
+
   const prioritized = [
     /recado da\s+([A-Z0-9][A-Za-z0-9&.+\- ]{0,28})/i,
     /somos a\s+([A-Z0-9][A-Za-z0-9&.+\- ]{0,28})/i,
@@ -121,6 +137,27 @@ export const extractCompanyFromJob = (rawText: string, lines: string[]): string 
       const company = normalizeCompanyName(match[1]);
       if (isValidCompanyName(company)) return company;
     }
+  }
+
+  // Heurística LinkedIn: a empresa costuma ficar logo acima/abaixo do título no topo
+  const title = extractJobTitleFromText(rawText, firstLines);
+  const titleIdx = firstLines.findIndex((l) => stripEmojis(l).includes(title));
+  if (titleIdx >= 0) {
+    for (const idx of [titleIdx - 1, titleIdx + 1, titleIdx + 2, 0, 1, 2]) {
+      const line = firstLines[idx] ?? "";
+      const picked = pickCompanyFromLine(line);
+      if (picked) return picked;
+    }
+  }
+
+  // Procura direta por uma linha "simples" com aparência de nome de empresa no topo
+  for (const line of firstLines) {
+    const cleaned = stripEmojis(line).trim();
+    if (cleaned.length < 2 || cleaned.length > 40) continue;
+    if (/react|developer|engineer|desenvolv|front.?end|back.?end|full.?stack/i.test(cleaned)) continue;
+    if (/^(logo|compartilhar|salvar|candidatar|h[ií]brido|tempo integral|promovida|avaliando|sobre a vaga|about the role)/i.test(cleaned)) continue;
+    const company = normalizeCompanyName(cleaned);
+    if (isValidCompanyName(company)) return company;
   }
 
   const aboutIdx = lines.findIndex(l => /^sobre (?:a empresa|n[oó]s|a \w+)/i.test(l));
@@ -158,20 +195,58 @@ export function buildPdfDocumentTitle(input: {
   date?: Date;
 }): string {
   const safeName = input.fullName.replace(/[<>:"/\\|?*]/g, "").trim();
-  const safeJob = sanitizeJobTitle(input.jobTitle)
-    .replace(/\//g, "-")
-    .replace(/\s*\|\s*/g, " - ")
-    .replace(/[<>:"\\|?*]/g, "")
-    .trim()
-    .slice(0, 70);
   const company = input.company?.replace(/[<>:"/\\|?*]/g, "").trim();
-  const companyPart = company ? `${company} - ` : "";
+
+  const isSentenceLike = (value: string): boolean => {
+    const v = stripEmojis(value).toLowerCase();
+    if (v.length < 10) return false;
+    // verbos comuns de "responsibilities" que não deveriam virar "título de vaga"
+    if (/\b(collaborate|develop|build|ensure|integrate|participate|support|maintain|work\s+closely)\b/i.test(v)) {
+      return true;
+    }
+    // frases longas com virgulas costumam ser bullets/responsabilidades
+    if (v.length > 55 && /,/.test(v)) return true;
+    return false;
+  };
+
+  const normalizeJobForTitle = (jobTitle: string): string => {
+    const cleaned = sanitizeJobTitle(jobTitle)
+      .replace(/\//g, "-")
+      .replace(/[<>:"\\|?*]/g, "")
+      .trim();
+
+    // pega só o pedaço mais "cargo" quando vier com lixo extra
+    const splitCandidates = cleaned
+      .split(/\s*(?:\||-|–|—|·|•)\s*/g)
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    const roleLike = splitCandidates.find((p) =>
+      /\b(developer|engineer|analyst|designer|front.?end|back.?end|full.?stack|devops|sre|qa|tester|react)\b/i.test(p)
+    );
+
+    const best = roleLike ?? splitCandidates[0] ?? cleaned;
+    const short = best.slice(0, 70).trim();
+    return isSentenceLike(short) ? "" : short;
+  };
+
+  const safeJob = normalizeJobForTitle(input.jobTitle);
   const middle = input.suffix?.trim() ? input.suffix.trim() : safeJob;
+
   const d = input.date ?? new Date();
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yyyy = d.getFullYear();
-  return `${safeName} - ${companyPart}${middle} - ${dd}-${mm}-${yyyy}`;
+
+  // evita " -  - " quando faltar middle
+  const parts = [
+    safeName,
+    company || "",
+    middle || "",
+    `${dd}-${mm}-${yyyy}`
+  ].filter((p) => p.trim().length > 0);
+
+  return parts.join(" - ");
 };
 
 /** Palavras genericas de anuncios de vaga — nunca sao lacunas ATS reais. */
