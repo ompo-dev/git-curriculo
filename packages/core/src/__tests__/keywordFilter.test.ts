@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { finalizeAtsAnalysis } from "../services/resumeAtsEnforcement";
+import { ensureSkillsSectionKeywords, finalizeAtsAnalysis } from "../services/resumeAtsEnforcement";
 import { buildJobKeywordPool, filterMeaningfulAtsKeywords, isMeaningfulAtsKeyword } from "../utils/text";
 import { ResumeService } from "../services/resumeService";
 
@@ -84,5 +84,41 @@ React, Next.js, TypeScript, TanStack Query, Axios, Zod, Hook Form.
     expect(ats.missingKeywords).not.toContain("pessoas");
     expect(ats.missingKeywords).not.toContain("conhecimento");
     expect(filterMeaningfulAtsKeywords(ats.missingKeywords)).toEqual(ats.missingKeywords);
+  });
+
+  it("ensureSkillsSectionKeywords adds missing evidenced skills without duplicates", () => {
+    const markdown = `# Dev
+## Resumo
+Resumo curto.
+
+## Skills
+- React
+- TypeScript
+
+## Experiencia
+- Entreguei telas com React e TypeScript.`;
+
+    const result = ensureSkillsSectionKeywords(markdown, ["react", "next.js", "typescript", "tanstack"]);
+
+    expect(result).toContain("## Skills");
+    expect(result).toContain("- Next.js");
+    expect(result).toContain("- TanStack Query");
+    expect((result.match(/- React/g) ?? []).length).toBe(1);
+  });
+
+  it("ensureSkillsSectionKeywords creates Skills section when missing", () => {
+    const markdown = `# Dev
+## Resumo
+Resumo curto.
+
+## Contato
+- Email: dev@example.com`;
+
+    const result = ensureSkillsSectionKeywords(markdown, ["next.js", "react hook form"]);
+
+    expect(result).toContain("## Skills");
+    expect(result).toContain("- Next.js");
+    expect(result).toContain("- React Hook Form");
+    expect(result.indexOf("## Skills")).toBeGreaterThan(result.indexOf("## Contato"));
   });
 });

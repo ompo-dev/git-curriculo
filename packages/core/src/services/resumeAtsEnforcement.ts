@@ -487,3 +487,77 @@ export function sanitizeResumeMarkdown(
   return result.trimEnd() + "\n";
 }
 
+function normalizeSkillLabel(keyword: string): string {
+  const norm = normalizeKeyword(keyword);
+  if (!norm) return "";
+  if (norm === "next.js") return "Next.js";
+  if (norm === "nextjs") return "Next.js";
+  if (norm === "next js") return "Next.js";
+  if (norm === "typescript") return "TypeScript";
+  if (norm === "javascript" || norm === "js") return "JavaScript";
+  if (norm === "react") return "React";
+  if (norm === "react hook form" || norm === "hook form") return "React Hook Form";
+  if (norm === "tanstack" || norm === "tanstack query") return "TanStack Query";
+  if (norm === "app router") return "App Router";
+  if (norm === "server components" || norm === "rsc") return "Server Components";
+  if (norm === "restful" || norm === "rest") return "REST API";
+  return keyword.trim();
+}
+
+function buildSkillsSectionContent(skills: string[]): string {
+  return skills.map(skill => `- ${skill}`).join("\n");
+}
+
+/**
+ * Fallback deterministico: garante keywords ATS na secao Skills quando
+ * elas ainda nao aparecem no curriculo apos as passagens de weave.
+ */
+export function ensureSkillsSectionKeywords(markdown: string, keywords: string[]): string {
+  const pending = filterMeaningfulAtsKeywords(keywords)
+    .filter(kw => !keywordPresentInResume(markdown, kw))
+    .slice(0, 24);
+  if (pending.length === 0) return markdown;
+
+  const sectionRe = /(^##\s+(?:Skills|Habilidades|Tecnologias)[^\n]*\n)([\s\S]*?)(?=\n##\s|(?![\s\S]))/im;
+  const match = markdown.match(sectionRe);
+
+  if (match) {
+    const [full, header, body = ""] = match;
+    const existing = unique(
+      body
+        .split(/[,\n]/)
+        .map(line => line.replace(/^[-*•]\s*/, "").trim())
+        .filter(Boolean)
+    );
+
+    const merged = unique([
+      ...existing,
+      ...pending.map(normalizeSkillLabel).filter(Boolean)
+    ]).slice(0, 36);
+
+    const replaced = `${header}${buildSkillsSectionContent(merged)}\n`;
+    return markdown.replace(full, replaced);
+  }
+
+  const inferred = pending.map(normalizeSkillLabel).filter(Boolean);
+  if (inferred.length === 0) return markdown;
+
+  const block = [
+    "## Skills",
+    "",
+    buildSkillsSectionContent(inferred),
+    ""
+  ].join("\n");
+
+  const insertAfter = markdown.match(/(^##\s+(?:Contato|Contact)[\s\S]*?)(?=\n##\s|(?![\s\S]))/im);
+  if (insertAfter?.[1]) {
+    return markdown.replace(insertAfter[1], `${insertAfter[1].trimEnd()}\n\n${block}`);
+  }
+
+  const summarySection = markdown.match(/(^##\s+(?:Resumo|Summary)[\s\S]*?)(?=\n##\s|(?![\s\S]))/im);
+  if (summarySection?.[1]) {
+    return markdown.replace(summarySection[1], `${summarySection[1].trimEnd()}\n\n${block}`);
+  }
+
+  return `${markdown.trimEnd()}\n\n${block}`.trimEnd() + "\n";
+}

@@ -12,6 +12,8 @@ import {
   AiAtsAnalyzer,
   blueprintToGenerationRules,
   buildRepoProfile,
+  buildProfileEvidenceCorpus,
+  filterMeaningfulAtsKeywords,
   sanitizeResumeMarkdown,
   updateBlueprintFromEvaluation,
   atsAnalysisFromBlueprint,
@@ -19,6 +21,8 @@ import {
   evidenceHintsForKeywords,
   filterEvidenceByRepos,
   findMissingEvidencedKeywords,
+  ensureSkillsSectionKeywords,
+  keywordInCorpus,
   normalizeKeyword,
   analyzeResumeQuality,
   buildPdfDocumentTitle,
@@ -606,7 +610,17 @@ export function AppWorkspace(): JSX.Element {
       }
 
       let fullGeneratedMarkdown = previousMarkdown;
-      const mandatoryKeywords = profileAnalysis.blueprint.evidencedKeywords;
+      const profileEvidenceCorpus = buildProfileEvidenceCorpus(snapshot, profilePrompt);
+      const evidencedRequiredSkills = jobSpec.requiredSkills
+        .map(normalizeKeyword)
+        .filter(Boolean)
+        .filter(skill => keywordInCorpus(skill, profileEvidenceCorpus));
+      const mandatoryKeywords = filterMeaningfulAtsKeywords(
+        unique([
+          ...profileAnalysis.blueprint.evidencedKeywords,
+          ...evidencedRequiredSkills
+        ])
+      );
       const candidateRules = customRules.trim();
       const omitSkillsRule = /tir.{0,20}(skills?|habilidades)|sem.{0,20}(skills?|habilidades)/i.test(candidateRules);
       const blueprintRules = blueprintToGenerationRules(profileAnalysis.blueprint, {
@@ -622,8 +636,8 @@ export function AppWorkspace(): JSX.Element {
         missingKeywords: [],
         suggestions: [],
         evidence: ["Fase 2/3: gerando curriculo encaixado no blueprint ATS..."],
-        evidencedKeywords: profileAnalysis.blueprint.evidencedKeywords,
-        gapsInResume: profileAnalysis.blueprint.evidencedKeywords,
+        evidencedKeywords: mandatoryKeywords,
+        gapsInResume: mandatoryKeywords,
         unavailableKeywords: profileAnalysis.blueprint.unavailableKeywords,
         blueprint: profileAnalysis.blueprint
       });
@@ -779,21 +793,106 @@ export function AppWorkspace(): JSX.Element {
         blueprint: profileAnalysis.blueprint
       });
 
-      const updatedBlueprint = updateBlueprintFromEvaluation(profileAnalysis.blueprint, finalAts);
+      let hardenedAts = finalAts;
+      for (let closingPass = 0; closingPass < 2; closingPass += 1) {
+        const strictTargets = filterMeaningfulAtsKeywords(
+          unique([
+            ...mandatoryKeywords,
+            ...hardenedAts.gapsInResume,
+            ...hardenedAts.missingKeywords
+          ])
+        ).filter(
+          kw =>
+            !hardenedAts.unavailableKeywords.some(
+              unavailable => normalizeKeyword(unavailable) === normalizeKeyword(kw)
+            )
+        );
+        const strictMissing = findMissingEvidencedKeywords(strictTargets, atsSearchText);
+        if (strictMissing.length === 0) break;
+
+        setAts({
+          ...hardenedAts,
+          evidence: [
+            `Fechamento ATS ${closingPass + 1}/2: cobrindo ${strictMissing.length} keyword(s) obrigatoria(s).`
+          ],
+          evidencedKeywords: unique([...hardenedAts.evidencedKeywords, ...mandatoryKeywords]),
+          gapsInResume: strictMissing
+        });
+
+        const closingHints = filterEvidenceByRepos(
+          evidenceHintsForKeywords(atsEvidence, strictMissing),
+          resumeReposForGeneration
+        );
+        const closingRules = [
+          blueprintRules || "",
+          "PASSAGEM OBRIGATORIA DE FECHAMENTO ATS: integre TODAS as keywords faltantes em bullets reais, sem inventar experiencia e sem dump de lista.",
+          `Keywords obrigatorias desta passagem: ${strictMissing.join(", ")}`
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+
+        atsSearchText = await resumeService.weaveMissingAtsKeywords(
+          {
+            resumeMarkdown: atsSearchText,
+            missingKeywords: strictMissing,
+            profileSnapshot: snapshot,
+            profilePrompt,
+            customRules: candidateRules || undefined,
+            atsBlueprintRules: closingRules,
+            resumeRepoNames: resumeReposForGeneration,
+            locale: "pt-BR",
+            evidenceHints: closingHints
+          },
+          accumulated => {
+            atsSearchText = accumulated;
+            setStreamingMarkdown(accumulated);
+          }
+        );
+
+        if (!omitSkillsRule) {
+          const mandatoryMissing = findMissingEvidencedKeywords(mandatoryKeywords, atsSearchText);
+          if (mandatoryMissing.length > 0) {
+            atsSearchText = ensureSkillsSectionKeywords(atsSearchText, mandatoryMissing);
+          }
+        }
+
+        atsSearchText = sanitizeResumeMarkdown(atsSearchText, {
+          allowedProjectRepos: resumeReposForGeneration,
+          profilePrompt,
+          jobSpec
+        });
+        generatedResume.rawMarkdown = atsSearchText;
+        setEditedMarkdown(atsSearchText);
+        setStreamingMarkdown(atsSearchText);
+
+        hardenedAts = await aiAts.evaluateResumeAgainstBlueprint({
+          jobSpec,
+          jobFullText: jobText,
+          profileSnapshot: snapshot,
+          profilePrompt,
+          resumeRepoNames: resumeReposForGeneration,
+          resumeMarkdown: atsSearchText,
+          coverLetterMarkdown: coverLetterMarkdown || undefined,
+          blueprint: profileAnalysis.blueprint
+        });
+      }
+
+      const updatedBlueprint = updateBlueprintFromEvaluation(profileAnalysis.blueprint, hardenedAts);
       setAtsBlueprint(updatedBlueprint);
-      setAts({ ...finalAts, blueprint: updatedBlueprint });
+      setAts({ ...hardenedAts, blueprint: updatedBlueprint });
 
       generatedResume.atsKeywords = unique([
         ...(generatedResume.atsKeywords ?? []),
-        ...finalAts.matchedKeywords,
-        ...finalAts.evidencedKeywords
-      ]).slice(0, 50);
+        ...mandatoryKeywords,
+        ...hardenedAts.matchedKeywords,
+        ...hardenedAts.evidencedKeywords
+      ]).slice(0, 60);
 
       setResume(generatedResume);
       setResumeSourceMarkdown(atsSearchText);
       setStreamingMarkdown(atsSearchText);
       setEditedMarkdown(atsSearchText);
-      await sqliteStorage.saveMetrics(new Date().toISOString(), { ...finalAts, blueprint: updatedBlueprint });
+      await sqliteStorage.saveMetrics(new Date().toISOString(), { ...hardenedAts, blueprint: updatedBlueprint });
       await sqliteStorage.saveResume(new Date().toISOString(), generatedResume);
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : "Erro ao gerar curriculo.");
