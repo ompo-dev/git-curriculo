@@ -888,7 +888,7 @@ export class ResumeService {
       const fromTech = extractKeywords(text);
       const n = normalizeKeyword(text);
       const matches = n.match(
-        /\b(?:react|reactjs|vite|typescript|javascript|js|ts|node|nodejs|python|java|go|rust|c#|dotnet|php|ruby|swift|kotlin|dart|flutter|sql|sqlite|postgres|postgresql|mongodb|mysql|mariadb|redis|elasticsearch|docker|kubernetes|k8s|aws|azure|gcp|graphql|grpc|rest|restful|api|axios|zod|zustand|tailwind|tailwindcss|shadcn|tachyons|bootstrap|material.?ui|chakra|radix|ci.?cd|github.?actions|gitlab.?ci|jenkins|travis|testing|vitest|jest|playwright|cypress|next\.?js|nextjs|nuqs|html|html5|css|css3|scss|sass|git|github|gitlab|bitbucket|vue|vuejs|angular|svelte|webpack|babel|rollup|parcel|figma|storybook|laravel|rails|django|flask|fastapi|spring|vtex|shopify|magento|woocommerce|e.?commerce|linux|bash|shell|firebase|supabase|vercel|netlify|cloudflare|seo|acessibilidade|accessibility|performance|pwa|ssr|ssg|spa|design.?system|microfrontend|micro.?frontend|monorepo|turborepo|nx|lerna|websocket|webhook|graphql|agile|scrum|kanban|jira|confluence|okr|kpi|analytics|datadog|sentry|observabilidade|clean.?code|solid|tdd|bdd|ddd|passkeys|2fa|hook.?form|react.?hook.?form|server.?components|metadata|json.?ld|sitemap|csp|csrf|xss|ethers|viem|web3|fintech|trading|exchange|lightweight.?charts|class.?variance|cva|core.?web.?vitals|lcp|cls|inp|tanstack|react.?query|wcag|i18n|intl|chart\.js|tradingview|logrocket|indexeddb|offline.?first|cache|caching)\b/g
+        /\b(?:react|reactjs|vite|typescript|javascript|js|ts|node|nodejs|express|middleware|middlewares|python|java|go|rust|c#|dotnet|php|ruby|swift|kotlin|dart|flutter|sql|sqlite|postgres|postgresql|mongodb|mysql|mariadb|redis|elasticsearch|docker|kubernetes|k8s|aws|azure|gcp|graphql|grpc|rest|restful|api|axios|zod|zustand|tailwind|tailwindcss|shadcn|tachyons|bootstrap|material.?ui|chakra|radix|ci.?cd|github.?actions|gitlab.?ci|jenkins|travis|testing|vitest|jest|playwright|cypress|next\.?js|nextjs|nuqs|html|html5|css|css3|scss|sass|git|github|gitlab|bitbucket|vue|vuejs|angular|svelte|webpack|babel|rollup|parcel|figma|storybook|laravel|rails|django|flask|fastapi|spring|vtex|shopify|magento|woocommerce|e.?commerce|linux|bash|shell|firebase|supabase|vercel|netlify|cloudflare|seo|acessibilidade|accessibility|performance|pwa|ssr|ssg|spa|design.?system|microservices?|microfrontend|micro.?frontend|monorepo|turborepo|nx|lerna|websocket|webhook|graphql|agile|scrum|kanban|jira|confluence|okr|kpi|analytics|datadog|sentry|observabilidade|clean.?code|solid|tdd|bdd|ddd|passkeys|2fa|hook.?form|react.?hook.?form|server.?components|serverless|metadata|json.?ld|sitemap|csp|csrf|xss|ethers|viem|web3|fintech|trading|exchange|rabbitmq|kafka|mensageria|lightweight.?charts|class.?variance|cva|core.?web.?vitals|lcp|cls|inp|tanstack|react.?query|wcag|i18n|intl|chart\.js|tradingview|logrocket|indexeddb|offline.?first|cache|caching)\b/g
       ) ?? [];
       return unique([...fromTech, ...matches]);
     };
@@ -909,7 +909,7 @@ export class ResumeService {
       /suas responsabilidades|responsibilities|requisitos|habilidades|o que oferecemos|beneficios/i
     );
     const respSection = findSection(
-      /responsabilidades e atribuicoes|responsabilidades:|responsabilidades incluem|responsibilities/i,
+      /principais responsabilidades|responsabilidades e atribuicoes|responsabilidades:|responsabilidades incluem|responsibilities|atribuicoes principais/i,
       /requisitos.?minimos|minimum req|habilidades que voce precisa|habilidades que voce|skills?(?:\s+que\s+voce|\s+required)|qualificacoes|o que voce vai encontrar|o que oferecemos/i
     );
     const reqSection = findSection(
@@ -929,15 +929,29 @@ export class ResumeService {
       .slice(0, 15);
 
     const reqText = reqSection.length > 0 ? reqSection.join("\n") : rawText;
-    const requiredSkills = unique([
-      ...reqSection.flatMap(l => extractJobKeywords(l)),
-      ...extractJobKeywords(reqText)
+    const requirementChunks = reqText
+      .split(/[.;]+/)
+      .map(chunk => chunk.replace(/^[-•*]\s*/, "").trim())
+      .filter(chunk => chunk.length > 4);
+    const preferredCue =
+      /\b(diferencial|diferenciais|desejavel|desejável|preferencialmente|conhecimento basico|conhecimento básico|sera um diferencial|será um diferencial|nice to have|bonus|outras tecnologias)\b/i;
+
+    const derivedPreferredChunks = requirementChunks.filter(chunk => preferredCue.test(stripAccents(chunk)));
+    const derivedRequiredChunks = requirementChunks.filter(chunk => !preferredCue.test(stripAccents(chunk)));
+
+    const preferredSkills = unique([
+      ...prefSection.flatMap(l => extractJobKeywords(l)),
+      ...derivedPreferredChunks.flatMap(chunk => extractJobKeywords(chunk))
     ]);
 
-    const preferredSkills =
-      prefSection.length > 0
-        ? unique(prefSection.flatMap(l => extractJobKeywords(l)))
-        : [];
+    const requiredDraft = unique([
+      ...derivedRequiredChunks.flatMap(chunk => extractJobKeywords(chunk)),
+      ...(derivedRequiredChunks.length === 0 ? extractJobKeywords(reqText) : [])
+    ]);
+    const preferredSet = new Set(preferredSkills.map(normalizeKeyword));
+    const requiredSkills = requiredDraft.filter(
+      skill => !preferredSet.has(normalizeKeyword(skill))
+    );
 
     const extraKeywords = [
       ...responsibilities.flatMap(l => extractJobKeywords(l)),

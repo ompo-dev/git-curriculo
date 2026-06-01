@@ -73,6 +73,62 @@ interface AtsJobDetails {
   preferredSkills: string[];
 }
 
+function normalizeLoose(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function extractHeadingValue(
+  rawJobText: string,
+  headingPattern: RegExp,
+  maxLookahead = 6
+): string | undefined {
+  const lines = rawJobText
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+  const idx = lines.findIndex(line => headingPattern.test(line));
+  if (idx < 0) return undefined;
+
+  for (let i = idx + 1; i < Math.min(idx + 1 + maxLookahead, lines.length); i += 1) {
+    const candidate = lines[i] ?? "";
+    if (!candidate) continue;
+    if (/^[A-Z][\w\s/-]{0,40}:$/.test(candidate)) break;
+    if (
+      /^(sobre a vaga|detalhes da vaga|principais responsabilidades|requisitos e qualificacoes|informacoes adicionais)$/.test(
+        normalizeLoose(candidate)
+      )
+    ) {
+      continue;
+    }
+    return candidate;
+  }
+  return undefined;
+}
+
+function extractNamedFieldValue(rawJobText: string, fieldName: string): string | undefined {
+  const lines = rawJobText
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+  const normalizedField = normalizeLoose(fieldName);
+
+  for (const line of lines) {
+    const normalizedLine = normalizeLoose(line);
+    if (!normalizedLine.startsWith(`${normalizedField}:`)) continue;
+    const idx = line.indexOf(":");
+    if (idx < 0) continue;
+    const value = line.slice(idx + 1).trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
 function extractJobSectionLines(
   rawJobText: string,
   startPattern: RegExp,
@@ -112,18 +168,32 @@ function buildAtsJobDetails(rawJobText: string): AtsJobDetails | null {
   try {
     const service = new ResumeService();
     const parsed = service.parseJobText(trimmed);
+    const companyFromHeading = extractHeadingValue(trimmed, /^sobre a empresa:?\s*$/i);
+    const areaFromLine =
+      extractNamedFieldValue(trimmed, "Área de Atuação") ??
+      extractNamedFieldValue(trimmed, "Area de Atuacao") ??
+      extractNamedFieldValue(trimmed, "Cargo");
     const benefits = extractJobSectionLines(
       trimmed,
       /(benef[ií]cios|o que oferecemos|benefits|perks)/i,
       /(responsabilidades?|requisitos?|skills?|qualifica[cç][oõ]es|sobre a empresa|about)/i,
       8
     );
+    const fallbackBenefits =
+      benefits.length > 0
+        ? benefits
+        : extractJobSectionLines(
+            trimmed,
+            /(informacoes adicionais|informa.* adicionais)/i,
+            /(responsabilidades?|requisitos?|skills?|qualifica|sobre a empresa|about|jornada|salario)/i,
+            8
+          );
 
     return {
-      company: parsed.company,
-      title: parsed.title,
+      company: companyFromHeading ?? parsed.company,
+      title: areaFromLine || parsed.title,
       responsibilities: parsed.responsibilities.slice(0, 8),
-      benefits,
+      benefits: fallbackBenefits,
       requiredSkills: parsed.requiredSkills.slice(0, 12),
       preferredSkills: parsed.preferredSkills.slice(0, 10)
     };
@@ -1715,7 +1785,7 @@ export function AppWorkspace(): JSX.Element {
                         {atsJobDetails.company ?? "Nao identificada"}
                       </div>
                       <div>
-                        <span className="font-medium text-[var(--gc-text)]">Cargo:</span>{" "}
+                        <span className="font-medium text-[var(--gc-text)]">Área/Cargo:</span>{" "}
                         {atsJobDetails.title || "Nao identificado"}
                       </div>
                     </div>

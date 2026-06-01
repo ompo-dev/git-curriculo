@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { ensureSkillsSectionKeywords, finalizeAtsAnalysis } from "../services/resumeAtsEnforcement";
+import { ensureSkillsSectionKeywords, enrichEvidencedKeywords, finalizeAtsAnalysis } from "../services/resumeAtsEnforcement";
 import { buildJobKeywordPool, filterMeaningfulAtsKeywords, isMeaningfulAtsKeyword, shouldOmitSkillsSection } from "../utils/text";
 import { ResumeService } from "../services/resumeService";
 
@@ -84,6 +84,25 @@ React, Next.js, TypeScript, TanStack Query, Axios, Zod, Hook Form.
     expect(ats.missingKeywords).not.toContain("pessoas");
     expect(ats.missingKeywords).not.toContain("conhecimento");
     expect(filterMeaningfulAtsKeywords(ats.missingKeywords)).toEqual(ats.missingKeywords);
+  });
+
+  it("enrichEvidencedKeywords filters noisy phrases from AI evidence lines", () => {
+    const result = enrichEvidencedKeywords({
+      score: 0,
+      matchedKeywords: [],
+      missingKeywords: [],
+      suggestions: [],
+      evidence: [
+        "repo: redis, postgresql, reducao de 40 em latencia.",
+        "repo: graphql"
+      ],
+      evidencedKeywords: ["nodejs", "reactjs"],
+      gapsInResume: [],
+      unavailableKeywords: []
+    });
+
+    expect(result).toEqual(expect.arrayContaining(["nodejs", "reactjs", "redis", "postgresql", "graphql"]));
+    expect(result).not.toContain("reducao de 40 em latencia");
   });
 
   it("ensureSkillsSectionKeywords adds missing evidenced skills without duplicates", () => {

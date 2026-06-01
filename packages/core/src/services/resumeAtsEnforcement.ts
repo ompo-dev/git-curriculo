@@ -131,7 +131,7 @@ export function enrichEvidencedKeywords(ats: AtsAnalysis): string[] {
     }
   }
 
-  return unique([...tokens]);
+  return filterMeaningfulAtsKeywords(unique([...tokens]));
 }
 
 function keywordMentionedInEvidence(keyword: string, evidence: string[]): boolean {
@@ -205,7 +205,7 @@ export function finalizeAtsAnalysis(
   const evidencedKeywords = enrichEvidencedKeywords(ats);
   const evidenceText = ats.evidence.join(" ");
 
-  const unavailableKeywords = ats.unavailableKeywords.filter(kw => {
+  const unavailableKeywords = filterMeaningfulAtsKeywords(ats.unavailableKeywords).filter(kw => {
     if (evidencedKeywords.some(e => normalizeKeyword(e) === normalizeKeyword(kw))) return false;
     if (keywordMentionedInEvidence(kw, ats.evidence)) return false;
     if (resumeMarkdown && keywordPresentInResume(resumeMarkdown, kw)) return false;

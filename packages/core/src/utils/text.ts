@@ -34,7 +34,7 @@ export const shouldOmitSkillsSection = (rulesText?: string): boolean => {
 };
 
 const TECH_PATTERN =
-  /\b(?:react|reactjs|react.?query|tanstack|vite|typescript|javascript|js|ts|node|nodejs|python|java|go|rust|c#|dotnet|php|ruby|swift|kotlin|dart|flutter|sql|sqlite|postgres|postgresql|mongodb|mysql|mariadb|redis|elasticsearch|docker|kubernetes|k8s|aws|azure|gcp|graphql|grpc|rest|restful|api|axios|zod|zustand|tailwind|tailwindcss|shadcn|shadcnui|shadcn.?ui|tachyons|bootstrap|material.?ui|chakra|radix|radix.?ui|ci.?cd|github.?actions|gitlab.?ci|jenkins|travis|testing|vitest|jest|playwright|cypress|next\.?js|nextjs|nuqs|html|html5|css|css3|scss|sass|git|github|gitlab|bitbucket|vue|vuejs|angular|svelte|webpack|babel|rollup|parcel|figma|storybook|laravel|rails|django|flask|fastapi|spring|vtex|shopify|magento|woocommerce|e.?commerce|linux|bash|shell|firebase|supabase|vercel|netlify|cloudflare|seo|acessibilidade|accessibility|wcag|performance|pwa|ssr|ssg|spa|design.?system|microfrontend|micro.?frontend|monorepo|turborepo|nx|lerna|websocket|webhook|agile|scrum|kanban|jira|confluence|okr|kpi|analytics|datadog|sentry|observabilidade|clean.?code|solid|tdd|bdd|ddd|passkeys|2fa|otp|i18n|intl|chart\.js|tradingview|logrocket|hook.?form|react.?hook.?form|server.?components|rsc|indexeddb|offline.?first|cache|caching|metadata|json.?ld|sitemap|csp|csrf|xss|ethers|viem|web3|fintech|trading|exchange|lightweight.?charts|class.?variance|cva|core.?web.?vitals|lcp|cls|inp)\b/g;
+  /\b(?:react|reactjs|react.?query|tanstack|vite|typescript|javascript|js|ts|node|nodejs|express|middleware|middlewares|python|java|go|rust|c#|dotnet|php|ruby|swift|kotlin|dart|flutter|sql|sqlite|postgres|postgresql|mongodb|mysql|mariadb|redis|elasticsearch|docker|kubernetes|k8s|aws|azure|gcp|graphql|grpc|rest|restful|api|axios|zod|zustand|tailwind|tailwindcss|shadcn|shadcnui|shadcn.?ui|tachyons|bootstrap|material.?ui|chakra|radix|radix.?ui|ci.?cd|github.?actions|gitlab.?ci|jenkins|travis|testing|vitest|jest|playwright|cypress|next\.?js|nextjs|nuqs|html|html5|css|css3|scss|sass|git|github|gitlab|bitbucket|vue|vuejs|angular|svelte|webpack|babel|rollup|parcel|figma|storybook|laravel|rails|django|flask|fastapi|spring|vtex|shopify|magento|woocommerce|e.?commerce|linux|bash|shell|firebase|supabase|vercel|netlify|cloudflare|seo|acessibilidade|accessibility|wcag|performance|pwa|ssr|ssg|spa|design.?system|microservices?|microfrontend|micro.?frontend|monorepo|turborepo|nx|lerna|websocket|webhook|agile|scrum|kanban|jira|confluence|okr|kpi|analytics|datadog|sentry|observabilidade|clean.?code|solid|tdd|bdd|ddd|passkeys|2fa|otp|i18n|intl|chart\.js|tradingview|logrocket|hook.?form|react.?hook.?form|server.?components|serverless|rsc|indexeddb|offline.?first|cache|caching|metadata|json.?ld|sitemap|csp|csrf|xss|ethers|viem|web3|fintech|trading|exchange|rabbitmq|kafka|mensageria|lightweight.?charts|class.?variance|cva|core.?web.?vitals|lcp|cls|inp)\b/g;
 
 export const extractKeywords = (input: string): string[] => {
   const lowered = normalizeKeyword(input);
@@ -66,6 +66,8 @@ function isValidCompanyName(value: string): boolean {
   if (/^(de|da|do|em|na|no|nos|nas|zona|area)\b/i.test(company)) return false;
   if (/^sobre (a empresa|a vaga)\b/i.test(company)) return false;
   if (/^(about the role|about the company|about us)\b/i.test(company)) return false;
+  if (/^(localiza(c|ç)(a|ã)o|location|cidade|estado|pais|country)\s*:/i.test(company)) return false;
+  if (/^(detalhes da vaga|informacoes adicionais|informações adicionais|area de atua(c|ç)(a|ã)o)\b/i.test(company)) return false;
   if (/excelencia|excelência|zona de|conhecer melhor|experiencia/i.test(company)) return false;
   // LinkedIn frequentemente vem tudo minúsculo (ex.: "act digital")
   if (!/[A-Za-zÀ-Ü0-9]/.test(company)) return false;
@@ -80,6 +82,18 @@ function normalizeCompanyName(value: string): string {
 }
 
 export const extractJobTitleFromText = (rawText: string, lines: string[]): string => {
+  const areaLine = lines.find(l => /^(area|área)\s+de\s+atua(c|ç)(a|ã)o\s*:/i.test(stripEmojis(l)));
+  if (areaLine) {
+    const area = areaLine.split(":").slice(1).join(":").trim();
+    if (area.length > 0) return sanitizeJobTitle(area);
+  }
+
+  const cargoLine = lines.find(l => /^cargo\s*:/i.test(stripEmojis(l)));
+  if (cargoLine) {
+    const cargo = cargoLine.split(":").slice(1).join(":").trim();
+    if (cargo.length > 0) return sanitizeJobTitle(cargo);
+  }
+
   const bracketLine = lines.find(l => /\[.+(?:desenvolv|developer|engineer|engenheiro|analista).+\]/i.test(l));
   if (bracketLine) {
     return sanitizeJobTitle(bracketLine.replace(/^\[|\]$/g, "").trim());
@@ -111,20 +125,7 @@ export const extractJobTitleFromText = (rawText: string, lines: string[]): strin
     );
   };
 
-  const rawTitle =
-    lines.find(looksLikeTitle) ??
-    lines.find(l => {
-      const cleaned = stripEmojis(l);
-      return (
-        cleaned.length < 90 &&
-        cleaned.length > 5 &&
-        !/^(logo|id:|sobre a|veja como|acesse|conhe|enviar|reative|pessoas|candidatar|compartilhar|salvar|promovid|anunciad|mais de \d|zona de|excelencia)/i.test(cleaned) &&
-        // evita pegar frases de responsabilidade como "título"
-        !/^(collaborate|develop|build|ensure|integrate|participate|support)\b/i.test(cleaned) &&
-        !/\b(?:collaborate|work closely|ensure|integrate|participate)\b/i.test(cleaned)
-      );
-    }) ??
-    "Vaga";
+  const rawTitle = lines.find(looksLikeTitle) ?? "Vaga";
 
   return sanitizeJobTitle(rawTitle);
 };
@@ -135,6 +136,8 @@ export const extractCompanyFromJob = (rawText: string, lines: string[]): string 
   const pickCompanyFromLine = (line: string): string | undefined => {
     const cleaned = stripEmojis(line).trim();
     if (!cleaned) return undefined;
+    if (/^(localiza(c|ç)(a|ã)o|location|cidade|estado|pais|country)\s*:/i.test(cleaned)) return undefined;
+    if (/^(detalhes da vaga|area de atua(c|ç)(a|ã)o|área de atuação|principais responsabilidades|requisitos e qualificacoes|requisitos e qualificações)\b/i.test(cleaned)) return undefined;
     // "Empresa · Local" ou "Empresa · Lisboa..." (LinkedIn)
     const dotParts = cleaned.split("·").map(p => p.trim()).filter(Boolean);
     const candidate = dotParts[0] ?? cleaned;
@@ -144,9 +147,7 @@ export const extractCompanyFromJob = (rawText: string, lines: string[]): string 
 
   const prioritized = [
     /recado da\s+([A-Z0-9][A-Za-z0-9&.+\- ]{0,28})/i,
-    /somos a\s+([A-Z0-9][A-Za-z0-9&.+\- ]{0,28})/i,
-    /\bna\s+([A-Z0-9][A-Za-z0-9&.+\- ]{0,28})\s*,/i,
-    /\bna\s+([A-Z0-9][A-Za-z0-9&.+\- ]{0,28})\b/i
+    /somos a\s+([A-Z0-9][A-Za-z0-9&.+\- ]{0,28})/i
   ];
 
   for (const pattern of prioritized) {
@@ -154,6 +155,14 @@ export const extractCompanyFromJob = (rawText: string, lines: string[]): string 
     if (match?.[1]) {
       const company = normalizeCompanyName(match[1]);
       if (isValidCompanyName(company)) return company;
+    }
+  }
+
+  const aboutCompanyIdx = lines.findIndex(l => /^sobre a empresa$/i.test(stripAccents(l)));
+  if (aboutCompanyIdx >= 0) {
+    for (let i = aboutCompanyIdx + 1; i < Math.min(aboutCompanyIdx + 6, lines.length); i += 1) {
+      const picked = pickCompanyFromLine(lines[i] ?? "");
+      if (picked) return picked;
     }
   }
 
@@ -187,7 +196,7 @@ export const extractCompanyFromJob = (rawText: string, lines: string[]): string 
         const company = normalizeCompanyName(somos[1]);
         if (isValidCompanyName(company)) return company;
       }
-      if (/^[A-Z0-9][A-Za-z0-9&.+\- ]{1,28}$/.test(stripEmojis(line)) && !/desenvolv|engineer|vaga|remot|consultoria/i.test(line)) {
+      if (/^[A-Z0-9À-Ü][A-Za-zÀ-Üà-ü0-9&.+\- ]{1,60}$/.test(stripEmojis(line)) && !/desenvolv|engineer|vaga|remot|consultoria/i.test(line)) {
         const company = normalizeCompanyName(line);
         if (isValidCompanyName(company)) return company;
       }
